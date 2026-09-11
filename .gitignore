@@ -1,0 +1,17 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+
+# Environment variables
+.env
+
+# Java / Maven
+java-app/target/
+
+# IDE
+.vscode/
+.idea/
+
+# Local docs (guía de setup, no se publica)
+docs/

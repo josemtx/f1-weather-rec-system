@@ -12,7 +12,6 @@ public class AppWeather {
             MongoDatabase database = mongoClient.getDatabase("F1-WeatherRec");
             MongoCollection<Document> collection = database.getCollection("forecast_data");
 
-            WeatherService weatherService = new WeatherService();
             ForecastDataPreprocessor preprocessor = new ForecastDataPreprocessor();
 
             String[] cities = {
@@ -25,7 +24,7 @@ public class AppWeather {
 
             for (String city : cities) {
                 try {
-                    String rawJson = weatherService.getWeatherData(city.split(",")[0], city.split(",")[1]);
+                    String rawJson = WeatherService.getWeatherData(city.split(",")[0], city.split(",")[1]);
                     JSONArray processedData = preprocessor.processForecastData(rawJson);
 
                     for (int i = 0; i < processedData.length(); i++) {
