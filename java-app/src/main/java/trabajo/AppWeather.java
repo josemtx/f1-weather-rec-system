@@ -14,20 +14,20 @@ import org.json.JSONArray;
 
 import java.util.logging.Logger;
 
+/**
+ * Ingesta diaria del pronostico de OpenWeatherMap (5 dias / 3 horas).
+ *
+ * Se pide por COORDENADAS DE CIRCUITO leidas de la coleccion `circuits`
+ * (cargada desde ml/config/circuits.json), no por una lista de ciudades
+ * hardcodeada: elimina el desajuste ciudad-circuito y hace que los circuitos
+ * nuevos (Madrid, Sepang...) entren automaticamente al anadirlos al catalogo.
+ */
 public class AppWeather {
     private static final Logger LOGGER = Logger.getLogger(AppWeather.class.getName());
 
     public static void main(String[] args) {
         LogConfig.configure();
         LOGGER.info("Iniciando ingesta de pronosticos de clima...");
-
-        String[] cities = {
-                "Manama,bh", "Jeddah,sa", "Melbourne,au", "Suzuka,jp", "Shanghai,cn",
-                "Miami,us", "Imola,it", "Monte-Carlo,mc", "Montreal,ca", "Barcelona,es",
-                "Spielberg,at", "Silverstone,uk", "Budapest,hu", "Spa,be", "Zandvoort,nl",
-                "Monza,it", "Baku,az", "Singapore,sg", "Austin,us", "Ciudad%20de%20Mexico,mx",
-                "Sao%20Paulo,br", "Las%20Vegas,us", "Lusail,qa", "Abu%20Dhabi,ae"
-        };
 
         int succeeded = 0;
         int failed = 0;
@@ -38,28 +38,40 @@ public class AppWeather {
 
         try (MongoClient mongoClient = MongoClients.create("mongodb://" + host + ":" + port)) {
             MongoDatabase database = mongoClient.getDatabase(dbName);
+            LOGGER.info("Conectado a MongoDB en " + host + ":" + port + " (db=" + dbName + ")");
+
+            MongoCollection<Document> circuits = database.getCollection("circuits");
             MongoCollection<Document> collection = database.getCollection("forecast_data");
-            collection.createIndex(Indexes.ascending("city", "datetime"), new IndexOptions().unique(true));
+            collection.createIndex(
+                    Indexes.ascending("circuit_short_name", "datetime"), new IndexOptions().unique(true));
 
             ForecastDataPreprocessor preprocessor = new ForecastDataPreprocessor();
 
-            for (String city : cities) {
-                String cityName = city.split(",")[0];
+            for (Document circuit : circuits.find()) {
+                String name = circuit.getString("circuit_short_name");
+                Double lat = circuit.getDouble("lat");
+                Double lon = circuit.getDouble("lon");
+                if (lat == null || lon == null) {
+                    LOGGER.warning("Circuito sin coordenadas, se omite: " + name);
+                    failed++;
+                    continue;
+                }
+
                 try {
-                    String rawJson = WeatherService.getWeatherData(cityName, city.split(",")[1]);
-                    JSONArray processedData = preprocessor.processForecastData(rawJson);
+                    String rawJson = WeatherService.getWeatherDataByCoords(lat, lon);
+                    JSONArray processedData = preprocessor.processForecastData(rawJson, name);
 
                     for (int i = 0; i < processedData.length(); i++) {
                         Document doc = Document.parse(processedData.getJSONObject(i).toString());
                         Bson filter = Filters.and(
-                                Filters.eq("city", doc.get("city")),
+                                Filters.eq("circuit_short_name", doc.get("circuit_short_name")),
                                 Filters.eq("datetime", doc.get("datetime")));
                         collection.replaceOne(filter, doc, new ReplaceOptions().upsert(true));
                     }
-                    LOGGER.info("Pronostico almacenado para " + cityName + " (" + processedData.length() + " entradas)");
+                    LOGGER.info("Pronostico almacenado para " + name + " (" + processedData.length() + " entradas)");
                     succeeded++;
                 } catch (Exception e) {
-                    LOGGER.severe("Fallo obteniendo/guardando el pronostico de " + cityName + ": " + e.getMessage());
+                    LOGGER.severe("Fallo obteniendo/guardando el pronostico de " + name + ": " + e.getMessage());
                     failed++;
                 }
             }
@@ -68,6 +80,6 @@ public class AppWeather {
             return;
         }
 
-        LOGGER.info("Ingesta de clima finalizada. Ciudades OK: " + succeeded + ", fallidas: " + failed);
+        LOGGER.info("Ingesta de clima finalizada. Circuitos OK: " + succeeded + ", fallidos: " + failed);
     }
 }

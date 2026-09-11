@@ -20,6 +20,11 @@ if (-not $env:OPENWEATHER_API_KEY) {
     }
 }
 
+# Se fija explicitamente (no se confia en que el entorno del Task Scheduler
+# lo propague) para evitar el incidente del 2026-09-11: sin esto, MongoDBClient
+# cae en su default hardcoded "F1-WeatherRec" (la base VIEJA), no la de produccion.
+$env:MONGO_DB = "F1-WeatherRec-Prod"
+
 $logDir = Join-Path $javaAppDir "logs"
 if (-not (Test-Path $logDir)) {
     New-Item -ItemType Directory -Path $logDir | Out-Null
