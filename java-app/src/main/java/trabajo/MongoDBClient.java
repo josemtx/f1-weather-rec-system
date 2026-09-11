@@ -2,7 +2,12 @@ package trabajo;
 
 import com.mongodb.MongoClient;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.IndexOptions;
+import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.ReplaceOptions;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import com.mongodb.client.MongoCollection;
 import org.json.JSONArray;
 
@@ -17,40 +22,75 @@ public class MongoDBClient implements AutoCloseable {
 
         this.client = new MongoClient(host, port);
         this.database = client.getDatabase(dbName);
+        ensureIndexes();
+    }
+
+    private void ensureIndexes() {
+        IndexOptions unique = new IndexOptions().unique(true);
+        database.getCollection("sessions").createIndex(Indexes.ascending("session_key"), unique);
+        database.getCollection("drivers").createIndex(Indexes.ascending("driver_number", "session_key"), unique);
+        database.getCollection("stints").createIndex(
+                Indexes.ascending("session_key", "driver_number", "stint_number"), unique);
+        database.getCollection("weather").createIndex(Indexes.ascending("session_key", "date"), unique);
+        database.getCollection("positions").createIndex(Indexes.ascending("driver_number", "session_key"), unique);
     }
 
     public void insertSessionsData(JSONArray sessionsData) {
         MongoCollection<Document> col = database.getCollection("sessions");
+        ReplaceOptions upsert = new ReplaceOptions().upsert(true);
         for (int i = 0; i < sessionsData.length(); i++) {
-            col.insertOne(Document.parse(sessionsData.getJSONObject(i).toString()));
+            Document doc = Document.parse(sessionsData.getJSONObject(i).toString());
+            Bson filter = Filters.eq("session_key", doc.get("session_key"));
+            col.replaceOne(filter, doc, upsert);
         }
     }
 
     public void insertDriversData(JSONArray driversData) {
         MongoCollection<Document> col = database.getCollection("drivers");
+        ReplaceOptions upsert = new ReplaceOptions().upsert(true);
         for (int i = 0; i < driversData.length(); i++) {
-            col.insertOne(Document.parse(driversData.getJSONObject(i).toString()));
+            Document doc = Document.parse(driversData.getJSONObject(i).toString());
+            Bson filter = Filters.and(
+                    Filters.eq("driver_number", doc.get("driver_number")),
+                    Filters.eq("session_key", doc.get("session_key")));
+            col.replaceOne(filter, doc, upsert);
         }
     }
 
     public void insertStintsData(JSONArray stintsData) {
         MongoCollection<Document> col = database.getCollection("stints");
+        ReplaceOptions upsert = new ReplaceOptions().upsert(true);
         for (int i = 0; i < stintsData.length(); i++) {
-            col.insertOne(Document.parse(stintsData.getJSONObject(i).toString()));
+            Document doc = Document.parse(stintsData.getJSONObject(i).toString());
+            Bson filter = Filters.and(
+                    Filters.eq("session_key", doc.get("session_key")),
+                    Filters.eq("driver_number", doc.get("driver_number")),
+                    Filters.eq("stint_number", doc.get("stint_number")));
+            col.replaceOne(filter, doc, upsert);
         }
     }
 
     public void insertWeatherData(JSONArray weatherData) {
         MongoCollection<Document> col = database.getCollection("weather");
+        ReplaceOptions upsert = new ReplaceOptions().upsert(true);
         for (int i = 0; i < weatherData.length(); i++) {
-            col.insertOne(Document.parse(weatherData.getJSONObject(i).toString()));
+            Document doc = Document.parse(weatherData.getJSONObject(i).toString());
+            Bson filter = Filters.and(
+                    Filters.eq("session_key", doc.get("session_key")),
+                    Filters.eq("date", doc.get("date")));
+            col.replaceOne(filter, doc, upsert);
         }
     }
 
     public void insertPositionsData(JSONArray positionsData) {
         MongoCollection<Document> col = database.getCollection("positions");
+        ReplaceOptions upsert = new ReplaceOptions().upsert(true);
         for (int i = 0; i < positionsData.length(); i++) {
-            col.insertOne(Document.parse(positionsData.getJSONObject(i).toString()));
+            Document doc = Document.parse(positionsData.getJSONObject(i).toString());
+            Bson filter = Filters.and(
+                    Filters.eq("driver_number", doc.get("driver_number")),
+                    Filters.eq("session_key", doc.get("session_key")));
+            col.replaceOne(filter, doc, upsert);
         }
     }
 

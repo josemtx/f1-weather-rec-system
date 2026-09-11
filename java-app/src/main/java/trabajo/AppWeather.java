@@ -3,7 +3,12 @@ package trabajo;
 import com.mongodb.MongoClient;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
+import com.mongodb.client.model.Filters;
+import com.mongodb.client.model.IndexOptions;
+import com.mongodb.client.model.Indexes;
+import com.mongodb.client.model.ReplaceOptions;
 import org.bson.Document;
+import org.bson.conversions.Bson;
 import org.json.JSONArray;
 
 public class AppWeather {
@@ -11,6 +16,7 @@ public class AppWeather {
         try (MongoClient mongoClient = new MongoClient("localhost", 27017)) {
             MongoDatabase database = mongoClient.getDatabase("F1-WeatherRec");
             MongoCollection<Document> collection = database.getCollection("forecast_data");
+            collection.createIndex(Indexes.ascending("city", "datetime"), new IndexOptions().unique(true));
 
             ForecastDataPreprocessor preprocessor = new ForecastDataPreprocessor();
 
@@ -29,7 +35,10 @@ public class AppWeather {
 
                     for (int i = 0; i < processedData.length(); i++) {
                         Document doc = Document.parse(processedData.getJSONObject(i).toString());
-                        collection.insertOne(doc);
+                        Bson filter = Filters.and(
+                                Filters.eq("city", doc.get("city")),
+                                Filters.eq("datetime", doc.get("datetime")));
+                        collection.replaceOne(filter, doc, new ReplaceOptions().upsert(true));
                     }
                     System.out.println("Datos de pronóstico almacenados para " + city.split(",")[0]);
                 } catch (Exception e) {
