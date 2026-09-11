@@ -11,7 +11,11 @@ import org.bson.conversions.Bson;
 import com.mongodb.client.MongoCollection;
 import org.json.JSONArray;
 
+import java.util.logging.Logger;
+
 public class MongoDBClient implements AutoCloseable {
+    private static final Logger LOGGER = Logger.getLogger(MongoDBClient.class.getName());
+
     private final MongoClient client;
     private final MongoDatabase database;
 
@@ -22,7 +26,14 @@ public class MongoDBClient implements AutoCloseable {
 
         this.client = new MongoClient(host, port);
         this.database = client.getDatabase(dbName);
-        ensureIndexes();
+        try {
+            ensureIndexes();
+        } catch (Exception e) {
+            client.close();
+            throw new IllegalStateException("No se pudo conectar/preparar MongoDB en " + host + ":" + port
+                    + " (db=" + dbName + "): " + e.getMessage(), e);
+        }
+        LOGGER.info("Conectado a MongoDB en " + host + ":" + port + " (db=" + dbName + ")");
     }
 
     private void ensureIndexes() {

@@ -8,11 +8,15 @@ import org.json.JSONArray;
 
 import java.io.IOException;
 import java.util.List;
+import java.util.logging.Logger;
 
 public class Formula1Service {
+    private static final Logger LOGGER = Logger.getLogger(Formula1Service.class.getName());
     private static final String URL_TEMPLATE = "https://api.openf1.org/v1/";
+    private static final int MAX_RETRIES = 5;
 
     public static String getSessions(List<Integer> years) throws IOException {
+        LOGGER.info("Solicitando sesiones para los anios: " + years);
         JSONArray sessions = new JSONArray();
         for (int year : years) {
             String response = makeRequest("sessions?year=" + year + "&session_name=Race");
@@ -21,6 +25,7 @@ public class Formula1Service {
                 sessions.put(sessionsArray.getJSONObject(i));
             }
         }
+        LOGGER.info("Sesiones obtenidas: " + sessions.length());
         return sessions.toString();
     }
     public static String getDrivers(JSONArray sessionArray) throws IOException {
@@ -76,19 +81,36 @@ public class Formula1Service {
     }
 
     private static String makeRequest(String request) throws IOException {
-        String url = String.format(URL_TEMPLATE + request);
+        return makeRequest(request, 1);
+    }
+
+    private static String makeRequest(String request, int attempt) throws IOException {
+        String url = URL_TEMPLATE + request;
         Response response = Request.Get(url).execute();
         HttpResponse httpResponse = response.returnResponse();
         String responseString = EntityUtils.toString(httpResponse.getEntity());
         int statusCode = httpResponse.getStatusLine().getStatusCode();
+
         if (statusCode == 429) {
-            try {
-                Thread.sleep(1000);
-            } catch (InterruptedException e) {
-                throw new RuntimeException(e);
+            if (attempt >= MAX_RETRIES) {
+                throw new IOException("OpenF1 sigue devolviendo 429 (rate limit) tras " + MAX_RETRIES
+                        + " intentos para: " + request);
             }
-            return makeRequest(request);
+            LOGGER.warning("Rate limit (429) en '" + request + "', reintento " + attempt + "/" + MAX_RETRIES);
+            try {
+                Thread.sleep(1000L * attempt);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IOException("Interrumpido esperando reintento de: " + request, e);
+            }
+            return makeRequest(request, attempt + 1);
         }
+
+        if (statusCode >= 400) {
+            LOGGER.severe("OpenF1 respondio " + statusCode + " para '" + request + "': " + responseString);
+            throw new IOException("OpenF1 devolvio codigo " + statusCode + " para " + request);
+        }
+
         return responseString;
     }
 
