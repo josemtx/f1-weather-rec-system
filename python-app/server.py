@@ -3,10 +3,16 @@
 import logging
 import os
 import sys
+from pathlib import Path
 
 from flask import Flask, jsonify
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError
+
+# ml/ vive en la raiz del repo, no dentro de python-app/ -- se anade al
+# path para poder montar ml.api.ml_blueprint sin duplicar codigo.
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+from ml.api.ml_blueprint import ml_bp  # noqa: E402
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,6 +21,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
+app.register_blueprint(ml_bp)
 
 mongo_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
 mongo_db_name = os.getenv("MONGODB_DB", "F1-WeatherRec")
