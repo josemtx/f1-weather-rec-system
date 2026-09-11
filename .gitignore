@@ -9,6 +9,7 @@ __pycache__/
 # Java / Maven
 java-app/target/
 java-app/dependency-reduced-pom.xml
+java-app/logs/
 
 # IDE
 .vscode/
