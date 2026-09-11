@@ -15,5 +15,13 @@ java-app/logs/
 .vscode/
 .idea/
 
-# Local docs (guía de setup, no se publica)
-docs/
+# Local docs (guía de setup, no se publica).
+# Anclado a la raíz con "/": sin la barra inicial el patrón coincide a
+# cualquier profundidad y ocultaba también ml/docs/, que sí se publica.
+/docs/
+
+# ml/ subsystem: artefactos generados, nunca datos ni modelos binarios
+ml/models/*
+!ml/models/.gitkeep
+ml/data/raw/
+ml/data/processed/
