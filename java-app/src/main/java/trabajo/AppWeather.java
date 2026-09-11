@@ -1,6 +1,7 @@
 package trabajo;
 
-import com.mongodb.MongoClient;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoCollection;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
@@ -31,8 +32,12 @@ public class AppWeather {
         int succeeded = 0;
         int failed = 0;
 
-        try (MongoClient mongoClient = new MongoClient("localhost", 27017)) {
-            MongoDatabase database = mongoClient.getDatabase("F1-WeatherRec");
+        String host = System.getenv().getOrDefault("MONGO_HOST", "localhost");
+        String port = System.getenv().getOrDefault("MONGO_PORT", "27017");
+        String dbName = System.getenv().getOrDefault("MONGO_DB", "F1-WeatherRec");
+
+        try (MongoClient mongoClient = MongoClients.create("mongodb://" + host + ":" + port)) {
+            MongoDatabase database = mongoClient.getDatabase(dbName);
             MongoCollection<Document> collection = database.getCollection("forecast_data");
             collection.createIndex(Indexes.ascending("city", "datetime"), new IndexOptions().unique(true));
 

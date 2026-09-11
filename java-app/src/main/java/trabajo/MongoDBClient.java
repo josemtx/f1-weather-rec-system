@@ -1,6 +1,7 @@
 package trabajo;
 
-import com.mongodb.MongoClient;
+import com.mongodb.client.MongoClient;
+import com.mongodb.client.MongoClients;
 import com.mongodb.client.MongoDatabase;
 import com.mongodb.client.model.Filters;
 import com.mongodb.client.model.IndexOptions;
@@ -24,7 +25,7 @@ public class MongoDBClient implements AutoCloseable {
         int port = Integer.parseInt(System.getenv().getOrDefault("MONGO_PORT", "27017"));
         String dbName = System.getenv().getOrDefault("MONGO_DB", "F1-WeatherRec");
 
-        this.client = new MongoClient(host, port);
+        this.client = MongoClients.create("mongodb://" + host + ":" + port);
         this.database = client.getDatabase(dbName);
         try {
             ensureIndexes();

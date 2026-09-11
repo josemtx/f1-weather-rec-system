@@ -28,53 +28,69 @@ public class Formula1Service {
         LOGGER.info("Sesiones obtenidas: " + sessions.length());
         return sessions.toString();
     }
-    public static String getDrivers(JSONArray sessionArray) throws IOException {
+    public static String getDrivers(JSONArray sessionArray) {
         JSONArray drivers = new JSONArray();
         for (int i = 0; i < sessionArray.length(); i++) {
             int session_key = sessionArray.getJSONObject(i).getInt("session_key");
-            String response = makeRequest("drivers?session_key=" + session_key);
-            JSONArray driversArray = new JSONArray(response);
-            for(int j = 0; j < driversArray.length(); j++) {
-                drivers.put(driversArray.getJSONObject(j));
+            try {
+                String response = makeRequest("drivers?session_key=" + session_key);
+                JSONArray driversArray = new JSONArray(response);
+                for (int j = 0; j < driversArray.length(); j++) {
+                    drivers.put(driversArray.getJSONObject(j));
+                }
+            } catch (Exception e) {
+                LOGGER.warning("Sin datos de pilotos para session_key=" + session_key + ": " + e.getMessage());
             }
         }
         return drivers.toString();
     }
 
-    public static String getStints(JSONArray sessionsArray) throws IOException {
+    public static String getStints(JSONArray sessionsArray) {
         JSONArray stints = new JSONArray();
         for (int i = 0; i < sessionsArray.length(); i++) {
             int session_key = sessionsArray.getJSONObject(i).getInt("session_key");
-            String response = makeRequest("stints?session_key=" + session_key);
-            JSONArray stintsArray = new JSONArray(response);
-            for (int j = 0; j < stintsArray.length(); j++) {
-                stints.put(stintsArray.getJSONObject(j));
+            try {
+                String response = makeRequest("stints?session_key=" + session_key);
+                JSONArray stintsArray = new JSONArray(response);
+                for (int j = 0; j < stintsArray.length(); j++) {
+                    stints.put(stintsArray.getJSONObject(j));
+                }
+            } catch (Exception e) {
+                LOGGER.warning("Sin datos de stints para session_key=" + session_key + ": " + e.getMessage());
             }
         }
         return stints.toString();
     }
 
-    public static String getPosition(JSONArray sessionsArray) throws IOException {
+    public static String getPosition(JSONArray sessionsArray) {
         JSONArray positions = new JSONArray();
         for (int i = 0; i < sessionsArray.length(); i++) {
             int session_key = sessionsArray.getJSONObject(i).getInt("session_key");
-            String response = makeRequest("position?session_key=" + session_key);
-            JSONArray positionsArray = new JSONArray(response);
-            for (int j = 0; j < positionsArray.length(); j++) {
-                positions.put(positionsArray.getJSONObject(j));
+            try {
+                String response = makeRequest("position?session_key=" + session_key);
+                JSONArray positionsArray = new JSONArray(response);
+                for (int j = 0; j < positionsArray.length(); j++) {
+                    positions.put(positionsArray.getJSONObject(j));
+                }
+            } catch (Exception e) {
+                LOGGER.warning("Sin datos de posiciones para session_key=" + session_key + ": " + e.getMessage());
             }
         }
         return positions.toString();
     }
 
-    public static String getWeather(JSONArray sessionsArray) throws IOException {
+    public static String getWeather(JSONArray sessionsArray) {
         JSONArray weather = new JSONArray();
         for (int i = 0; i < sessionsArray.length(); i++) {
             int session_key = sessionsArray.getJSONObject(i).getInt("session_key");
-            String response = makeRequest("weather?session_key=" + session_key);
-            JSONArray weatherArray = new JSONArray(response);
-            for (int j = 0; j < weatherArray.length(); j++) {
-                weather.put(weatherArray.getJSONObject(j));
+            try {
+                String response = makeRequest("weather?session_key=" + session_key);
+                JSONArray weatherArray = new JSONArray(response);
+                for (int j = 0; j < weatherArray.length(); j++) {
+                    weather.put(weatherArray.getJSONObject(j));
+                }
+            } catch (Exception e) {
+                LOGGER.warning("Sin datos de clima para session_key=" + session_key + ": " + e.getMessage());
             }
         }
         return weather.toString();
