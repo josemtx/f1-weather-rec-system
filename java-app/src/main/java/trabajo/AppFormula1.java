@@ -2,7 +2,6 @@ package trabajo;
 
 import org.json.JSONArray;
 
-import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
 import java.util.logging.Logger;
@@ -14,21 +13,31 @@ public class AppFormula1 {
         LogConfig.configure();
         LOGGER.info("Iniciando ingesta de datos de Formula 1...");
 
-        List<Integer> years = Arrays.asList(2023, 2024);
+        List<Integer> years = Arrays.asList(2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026);
+        List<Integer> modernYears = Arrays.asList(2023, 2024, 2025, 2026);
 
-        JSONArray sessionsArray;
-        try {
-            String sessions = Formula1Service.getSessions(years);
-            sessionsArray = new JSONArray(sessions);
-        } catch (IOException e) {
-            LOGGER.severe("No se pudieron obtener las sesiones, se aborta la ingesta: " + e.getMessage());
+        // Race para todo el rango (OpenF1 solo tiene datos reales desde 2023,
+        // los anios anteriores devuelven 404 y se registran como advertencia).
+        // Qualifying/Sprint Qualifying/Sprint solo se piden para 2023+: son las
+        // sesiones que sustentan el modelo "era moderna" (decision: precision
+        // maxima 2023-2026, ver ml/docs/ARCHITECTURE.md), y no existen antes.
+        JSONArray sessionsArray = new JSONArray(Formula1Service.getSessions(years, "Race"));
+        appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Qualifying"));
+        appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Sprint Qualifying"));
+        appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Sprint"));
+
+        if (sessionsArray.length() == 0) {
+            LOGGER.severe("No se obtuvo ninguna sesion para los anios " + years + ", se aborta la ingesta.");
             return;
         }
+        LOGGER.info("Total de sesiones combinadas (Race+Qualifying+Sprint Qualifying+Sprint): " + sessionsArray.length());
 
         try (MongoDBClient mongoDBClient = new MongoDBClient()) {
             saveSessions(mongoDBClient, sessionsArray);
             saveDrivers(mongoDBClient, sessionsArray);
             saveStints(mongoDBClient, sessionsArray);
+            saveLaps(mongoDBClient, sessionsArray);
+            savePit(mongoDBClient, sessionsArray);
             saveWeather(mongoDBClient, sessionsArray);
             savePositions(mongoDBClient, sessionsArray);
         } catch (Exception e) {
@@ -37,6 +46,13 @@ public class AppFormula1 {
         }
 
         LOGGER.info("Ingesta de datos de Formula 1 finalizada.");
+    }
+
+    private static void appendSessions(JSONArray target, String rawJson) {
+        JSONArray source = new JSONArray(rawJson);
+        for (int i = 0; i < source.length(); i++) {
+            target.put(source.getJSONObject(i));
+        }
     }
 
     private static void saveSessions(MongoDBClient client, JSONArray sessionsArray) {
@@ -68,6 +84,28 @@ public class AppFormula1 {
             LOGGER.info("Stints guardados: " + processed.length());
         } catch (Exception e) {
             LOGGER.severe("Fallo guardando stints: " + e.getMessage());
+        }
+    }
+
+    private static void saveLaps(MongoDBClient client, JSONArray sessionsArray) {
+        try {
+            String laps = Formula1Service.getLaps(sessionsArray);
+            JSONArray processed = FormulaDataPreprocessor.processLapsData(new JSONArray(laps));
+            client.insertLapsData(processed);
+            LOGGER.info("Vueltas guardadas: " + processed.length());
+        } catch (Exception e) {
+            LOGGER.severe("Fallo guardando vueltas: " + e.getMessage());
+        }
+    }
+
+    private static void savePit(MongoDBClient client, JSONArray sessionsArray) {
+        try {
+            String pit = Formula1Service.getPit(sessionsArray);
+            JSONArray processed = FormulaDataPreprocessor.processPitData(new JSONArray(pit));
+            client.insertPitData(processed);
+            LOGGER.info("Paradas en boxes guardadas: " + processed.length());
+        } catch (Exception e) {
+            LOGGER.severe("Fallo guardando paradas en boxes: " + e.getMessage());
         }
     }
 

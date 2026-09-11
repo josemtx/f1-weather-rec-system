@@ -45,6 +45,10 @@ public class MongoDBClient implements AutoCloseable {
                 Indexes.ascending("session_key", "driver_number", "stint_number"), unique);
         database.getCollection("weather").createIndex(Indexes.ascending("session_key", "date"), unique);
         database.getCollection("positions").createIndex(Indexes.ascending("driver_number", "session_key"), unique);
+        database.getCollection("laps").createIndex(
+                Indexes.ascending("session_key", "driver_number", "lap_number"), unique);
+        database.getCollection("pit").createIndex(
+                Indexes.ascending("session_key", "driver_number", "date"), unique);
     }
 
     public void insertSessionsData(JSONArray sessionsData) {
@@ -102,6 +106,32 @@ public class MongoDBClient implements AutoCloseable {
             Bson filter = Filters.and(
                     Filters.eq("driver_number", doc.get("driver_number")),
                     Filters.eq("session_key", doc.get("session_key")));
+            col.replaceOne(filter, doc, upsert);
+        }
+    }
+
+    public void insertLapsData(JSONArray lapsData) {
+        MongoCollection<Document> col = database.getCollection("laps");
+        ReplaceOptions upsert = new ReplaceOptions().upsert(true);
+        for (int i = 0; i < lapsData.length(); i++) {
+            Document doc = Document.parse(lapsData.getJSONObject(i).toString());
+            Bson filter = Filters.and(
+                    Filters.eq("session_key", doc.get("session_key")),
+                    Filters.eq("driver_number", doc.get("driver_number")),
+                    Filters.eq("lap_number", doc.get("lap_number")));
+            col.replaceOne(filter, doc, upsert);
+        }
+    }
+
+    public void insertPitData(JSONArray pitData) {
+        MongoCollection<Document> col = database.getCollection("pit");
+        ReplaceOptions upsert = new ReplaceOptions().upsert(true);
+        for (int i = 0; i < pitData.length(); i++) {
+            Document doc = Document.parse(pitData.getJSONObject(i).toString());
+            Bson filter = Filters.and(
+                    Filters.eq("session_key", doc.get("session_key")),
+                    Filters.eq("driver_number", doc.get("driver_number")),
+                    Filters.eq("date", doc.get("date")));
             col.replaceOne(filter, doc, upsert);
         }
     }

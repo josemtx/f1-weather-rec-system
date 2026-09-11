@@ -14,6 +14,7 @@ public class FormulaDataPreprocessor {
             JSONObject rawSession = rawSessions.getJSONObject(i);
             JSONObject session = new JSONObject();
             session.put("session_key", rawSession.getInt("session_key"));
+            session.put("session_name", rawSession.getString("session_name"));
             session.put("country_name", rawSession.getString("country_name"));
             session.put("country_code", rawSession.getString("country_code"));
             session.put("circuit_short_name", rawSession.getString("circuit_short_name"));
@@ -44,6 +45,22 @@ public class FormulaDataPreprocessor {
             rawStint.remove("meeting_key");
         }
         return arrayStints;
+    }
+
+    public static JSONArray processLapsData(JSONArray arrayLaps) {
+        for (int i = 0; i < arrayLaps.length(); i++) {
+            JSONObject rawLap = arrayLaps.getJSONObject(i);
+            rawLap.remove("meeting_key");
+        }
+        return arrayLaps;
+    }
+
+    public static JSONArray processPitData(JSONArray arrayPit) {
+        for (int i = 0; i < arrayPit.length(); i++) {
+            JSONObject rawPit = arrayPit.getJSONObject(i);
+            rawPit.remove("meeting_key");
+        }
+        return arrayPit;
     }
 
     public static JSONArray processWeatherData(JSONArray arrayWeather) {
