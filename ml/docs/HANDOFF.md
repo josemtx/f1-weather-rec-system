@@ -32,26 +32,28 @@ en cada comando Java; Python lo lee de `.env`.
 
 ---
 
-## 3. Trabajo SIN COMMITEAR (importante — commitear al retomar)
+## 3. Estado de git
+
+**Todo commiteado, árbol limpio** (14 commits en `main`, sin subir a remoto). Los últimos cuatro
+(2026-09-12 tarde) cierran la sesión:
 
 ```
- M ml/simulation/monte_carlo.py          ← calibración RESIDUAL_SCALE=0.5 + rangos "si termina" + fix identidad pilotos
-?? ml/training/calibrate_simulation.py   ← verifica que el intervalo P10-P90 cubre 80% real (antes 88%, inflado)
-?? ml/tests/test_simulator_identity.py   ← 3 tests: driver_code no se pierde al anular categorías no vistas
-?? ml/dashboard/export_data.py           ← exporta data.json para el dashboard estático
-?? ml/dashboard/nerd_data.py             ← 71 features etiquetadas en 9 grupos para la pestaña Nerd Data
-?? ml/dashboard/circuit_art.py           ← mapea circuito → SVG oficial F1.com, recolorea a currentColor
-?? ml/dashboard/web/                     ← index.html + data.json (el dashboard estático nuevo)
-?? ml/ingestion/circuit_trace.py         ← APARCADO: extrae trazado real por GPS. Funciona, pero no es el camino (ver §6)
-?? svg/                                  ← 25 SVG de circuitos aportados por el usuario (paquete F1.com)
+358ddda Add session handoff document
+224a136 Add shelved tool to trace a circuit from OpenF1 GPS telemetry
+2a3ed49 Add static dashboard: FIA timing-screen aesthetic, publishable on GitHub Pages
+6280b2d Calibrate simulation intervals and separate DNF from finishing range
 ```
 
-Sugerencia de commits (por capa, estilo del repo: inglés imperativo, cuerpo explicando el *por qué*):
-1. Simulator calibration + finisher-conditional ranges + identity fix (+ test + calibrate script)
-2. Static dashboard (export_data, nerd_data, circuit_art, web/, svg/)
-3. circuit_trace.py — decidir si commitear como "shelved tool" o borrar.
+Ficheros clave de esos commits, por si hay que tocarlos:
+- `ml/simulation/monte_carlo.py` — `RESIDUAL_SCALE=0.5`, rangos "si termina", fix identidad de pilotos
+- `ml/training/calibrate_simulation.py` — verifica cobertura 80% del intervalo P10-P90
+- `ml/tests/test_simulator_identity.py` — driver_code no se pierde al anular categorías no vistas
+- `ml/dashboard/{export_data,nerd_data,circuit_art}.py` + `ml/dashboard/web/` — dashboard estático
+- `ml/ingestion/circuit_trace.py` — APARCADO (ver §6), commiteado como herramienta documentada
+- `svg/` — 25 siluetas oficiales F1.com aportadas por el usuario
 
 Tests: 19/19 en verde (`./venv/Scripts/python.exe -m pytest ml/tests/ -q`).
+`git push` no se ha hecho nunca en esta sesión — decisión del usuario.
 
 ---
 
