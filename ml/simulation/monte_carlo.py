@@ -14,11 +14,10 @@ import numpy as np
 import pandas as pd
 
 from ml.simulation.randomness_models import (
+    DEFAULT_PIT_STD,
     climate_variability,
     rain_probability,
     safety_car_shock_scale,
-    sample_dnf_flags,
-    sample_pit_duration_jitter,
 )
 from ml.training.model_registry import (
     apply_calibration,
@@ -129,8 +128,6 @@ class RaceSimulator:
         base_dnf_proba = apply_calibration(base_dnf_raw, self.dnf_cal["a"], self.dnf_cal["b"])
 
         driver_codes = race_features["driver_code"].values
-        rank_accum = {code: [] for code in driver_codes}
-        dnf_accum = {code: [] for code in driver_codes}
 
         pit_std = (
             race_features["team_pit_stop_duration_stddev_last5"].values
@@ -138,65 +135,88 @@ class RaceSimulator:
             else np.full(n_drivers, np.nan)
         )
 
-        for _ in range(n_simulations):
-            X = X_base.copy()
+        # Todas las simulaciones se resuelven en UNA llamada al modelo en vez
+        # de una por simulacion: se apilan n_simulations copias de la parrilla
+        # y se perturban de forma vectorizada. La version en bucle hacia 5000
+        # predicciones de 22 filas y tardaba ~80s; asi son ~2s, que es lo que
+        # hace viable precalcular la rejilla de escenarios del sandbox.
+        #
+        # Orden de las filas: el indice de piloto cicla rapido y el de
+        # simulacion lento, asi que fila i -> sim = i // n_drivers.
+        row_index = np.tile(np.arange(n_drivers), n_simulations)
+        X = X_base.iloc[row_index].reset_index(drop=True)
+        total = n_simulations * n_drivers
 
-            temp_noise = rng.normal(0, climate_std["temp_2m_avg"])
-            if "race_day_temp_avg" in X.columns:
-                X["race_day_temp_avg"] = X["race_day_temp_avg"] + temp_noise
-            if "race_day_temp_max" in X.columns:
-                X["race_day_temp_max"] = X["race_day_temp_max"] + temp_noise
+        def per_sim(values):
+            """Un valor por simulacion, repetido para todos sus pilotos."""
+            return np.repeat(values, n_drivers)
 
-            is_rain_sim = rng.random() < rain_p
-            if is_rain_sim and "race_day_precipitation_mm" in X.columns:
-                X["race_day_precipitation_mm"] = np.maximum(
-                    X["race_day_precipitation_mm"], rng.exponential(3.0)
-                )
-                if "climate_rain_probability_flag" in X.columns:
-                    X["climate_rain_probability_flag"] = 1.0
+        # Clima: compartido por todos los pilotos de una misma simulacion,
+        # porque es la misma carrera.
+        temp_noise = per_sim(rng.normal(0, climate_std["temp_2m_avg"], size=n_simulations))
+        if "race_day_temp_avg" in X.columns:
+            X["race_day_temp_avg"] = X["race_day_temp_avg"].to_numpy(dtype=float) + temp_noise
+        if "race_day_temp_max" in X.columns:
+            X["race_day_temp_max"] = X["race_day_temp_max"].to_numpy(dtype=float) + temp_noise
 
-            if "race_day_humidity" in X.columns:
-                X["race_day_humidity"] = X["race_day_humidity"] + rng.normal(0, climate_std["humidity_relative"])
-            if "race_day_wind_speed" in X.columns:
-                X["race_day_wind_speed"] = np.maximum(
-                    0.0, X["race_day_wind_speed"] + rng.normal(0, climate_std["wind_speed_10m"])
-                )
+        is_rain_sim = rng.random(n_simulations) < rain_p
+        rain_rows = per_sim(is_rain_sim)
+        if "race_day_precipitation_mm" in X.columns:
+            rain_mm = per_sim(rng.exponential(3.0, size=n_simulations))
+            current = X["race_day_precipitation_mm"].to_numpy(dtype=float)
+            X["race_day_precipitation_mm"] = np.where(
+                rain_rows, np.maximum(current, rain_mm), current
+            )
+            if "climate_rain_probability_flag" in X.columns:
+                flag = X["climate_rain_probability_flag"].to_numpy(dtype=float)
+                X["climate_rain_probability_flag"] = np.where(rain_rows, 1.0, flag)
 
-            if "team_avg_pit_stop_duration_last5" in X.columns:
-                jitter = np.array([sample_pit_duration_jitter(s, rng, 1)[0] for s in pit_std])
-                X["team_avg_pit_stop_duration_last5"] = X["team_avg_pit_stop_duration_last5"] + jitter
+        if "race_day_humidity" in X.columns:
+            hum_noise = per_sim(rng.normal(0, climate_std["humidity_relative"], size=n_simulations))
+            X["race_day_humidity"] = X["race_day_humidity"].to_numpy(dtype=float) + hum_noise
+        if "race_day_wind_speed" in X.columns:
+            wind_noise = per_sim(rng.normal(0, climate_std["wind_speed_10m"], size=n_simulations))
+            X["race_day_wind_speed"] = np.maximum(
+                0.0, X["race_day_wind_speed"].to_numpy(dtype=float) + wind_noise
+            )
 
-            dnf_this_sim = sample_dnf_flags(base_dnf_proba, rng)
-            if is_rain_sim:
-                # Shock adicional de fiabilidad: lluvia + circuitos propensos a
-                # SC/VSC elevan el riesgo de incidente (simplificacion
-                # documentada, no un modelo de SC por vuelta -- ver plan).
-                extra_dnf = rng.random(n_drivers) < (0.05 * sc_scale)
-                dnf_this_sim = dnf_this_sim | extra_dnf
+        # Estrategia: el jitter de boxes es por piloto y simulacion, con la
+        # variabilidad historica de SU equipo.
+        if "team_avg_pit_stop_duration_last5" in X.columns:
+            std_per_row = np.tile(
+                np.array([s if s and s > 0 else DEFAULT_PIT_STD for s in pit_std], dtype=float),
+                n_simulations,
+            )
+            jitter = rng.normal(0.0, std_per_row)
+            X["team_avg_pit_stop_duration_last5"] = (
+                X["team_avg_pit_stop_duration_last5"].to_numpy(dtype=float) + jitter
+            )
 
-            scores = self.reg.predict(X)
+        dnf_flat = rng.random(total) < np.tile(base_dnf_proba, n_simulations)
+        # Shock adicional de fiabilidad bajo lluvia en circuitos propensos a
+        # SC/VSC (simplificacion documentada, no un modelo de SC por vuelta).
+        extra_dnf = (rng.random(total) < (0.05 * sc_scale)) & rain_rows
+        dnf_flat = dnf_flat | extra_dnf
 
-            # Ruido residual: representa lo que el modelo NO sabe. Calibrado
-            # con la dispersion real de su error en validacion, de modo que
-            # la distribucion de resultados simulados sea tan ancha como de
-            # verdad lo es su capacidad predictiva.
-            scores = scores + rng.normal(0.0, self.residual_std, size=n_drivers)
+        scores = self.reg.predict(X)
+        # Ruido residual: lo que el modelo NO sabe, calibrado con la
+        # dispersion real de su error en validacion.
+        scores = scores + rng.normal(0.0, self.residual_std, size=total)
 
-            worst_score = max(float(np.max(scores)), n_drivers) + 10.0
-            scores_sim = np.where(dnf_this_sim, worst_score + rng.random(n_drivers), scores)
+        scores = scores.reshape(n_simulations, n_drivers)
+        dnf_matrix = dnf_flat.reshape(n_simulations, n_drivers)
 
-            order = np.argsort(scores_sim)
-            ranks = np.empty(n_drivers, dtype=int)
-            ranks[order] = np.arange(1, n_drivers + 1)
+        worst = np.maximum(scores.max(axis=1, keepdims=True), n_drivers) + 10.0
+        scores = np.where(dnf_matrix, worst + rng.random((n_simulations, n_drivers)), scores)
 
-            for i, code in enumerate(driver_codes):
-                rank_accum[code].append(int(ranks[i]))
-                dnf_accum[code].append(bool(dnf_this_sim[i]))
+        order = np.argsort(scores, axis=1)
+        ranks = np.empty_like(order)
+        np.put_along_axis(ranks, order, np.arange(1, n_drivers + 1), axis=1)
 
         results = []
-        for code in driver_codes:
-            ranks_arr = np.array(rank_accum[code])
-            dnf_arr = np.array(dnf_accum[code])
+        for i, code in enumerate(driver_codes):
+            ranks_arr = ranks[:, i]
+            dnf_arr = dnf_matrix[:, i]
             results.append({
                 "driver_code": code,
                 "p_win": float((ranks_arr == 1).mean()),
