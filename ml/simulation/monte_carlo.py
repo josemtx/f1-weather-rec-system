@@ -35,6 +35,23 @@ CATEGORICAL_COLS = ["circuit_short_name", "circuit_type", "overtaking_difficulty
 # magnitud del error tipico observado, ~3-4 posiciones.
 DEFAULT_RESIDUAL_STD = 3.5
 
+# El ruido inyectado NO es el error medido en bruto, sino la mitad.
+#
+# Motivo: al ruido se le suma el efecto de REORDENAR. El error del modelo ya
+# incluye que su orden es imperfecto; si ademas se perturba el score y se
+# vuelve a ordenar, la dispersion se cuenta dos veces. Medido sobre las 479
+# predicciones de 2025 (el intervalo P10-P90 deberia cubrir el 80% de los
+# resultados reales):
+#
+#     escala   sigma   cobertura   anchura   aciertos +-3
+#       1.00    3.46      88.1%      13.0        50.3%     <- inflado
+#       0.65    2.25      84.1%      11.9        54.5%
+#       0.50    1.73      80.8%      11.4        56.6%     <- calibrado
+#       0.40    1.39      77.7%      10.9        56.6%     <- demasiado seguro
+#
+# Reejecutable con ml/training/calibrate_simulation.py.
+RESIDUAL_SCALE = 0.5
+
 
 class RaceSimulator:
     def __init__(self, db, model_dir: Path | None = None):
@@ -85,6 +102,10 @@ class RaceSimulator:
                 unseen = set(df[col].dropna().unique()) - set(known)
                 if unseen:
                     logger.info(f"Categorias no vistas en entrenamiento en '{col}' -> NaN: {sorted(unseen)}")
+                # Se anulan explicitamente antes de tipar: dejar que
+                # pd.Categorical las descarte por si solo esta deprecado y
+                # pasara a lanzar excepcion, ademas de ocultar la intencion.
+                df[col] = df[col].where(df[col].isin(known))
                 df[col] = pd.Categorical(df[col], categories=known)
             else:
                 df[col] = df[col].astype("category")
@@ -96,7 +117,13 @@ class RaceSimulator:
         """race_features: una fila por piloto con al menos self.feature_cols +
         driver_code + circuit_short_name + circuit_type + race_date. Devuelve
         un DataFrame con probabilidades agregadas por piloto tras N simulaciones."""
-        race_features = self._prep_categoricals(race_features).reset_index(drop=True)
+        race_features = race_features.reset_index(drop=True)
+        # Los codigos se capturan ANTES de fijar categorias: _prep_categoricals
+        # convierte en NaN las no vistas en entrenamiento, y driver_code es una
+        # de ellas. El modelo debe recibir NaN (no conoce a un debutante), pero
+        # el resultado tiene que seguir identificandolo por su nombre.
+        driver_codes = race_features["driver_code"].to_numpy()
+        race_features = self._prep_categoricals(race_features)
         n_drivers = len(race_features)
         rng = np.random.default_rng(seed)
 
@@ -126,8 +153,6 @@ class RaceSimulator:
         X_base = race_features[self.feature_cols]
         base_dnf_raw = self.dnf_clf.predict_proba(X_base)[:, 1]
         base_dnf_proba = apply_calibration(base_dnf_raw, self.dnf_cal["a"], self.dnf_cal["b"])
-
-        driver_codes = race_features["driver_code"].values
 
         pit_std = (
             race_features["team_pit_stop_duration_stddev_last5"].values
@@ -201,7 +226,7 @@ class RaceSimulator:
         scores = self.reg.predict(X)
         # Ruido residual: lo que el modelo NO sabe, calibrado con la
         # dispersion real de su error en validacion.
-        scores = scores + rng.normal(0.0, self.residual_std, size=total)
+        scores = scores + rng.normal(0.0, self.residual_std * RESIDUAL_SCALE, size=total)
 
         scores = scores.reshape(n_simulations, n_drivers)
         dnf_matrix = dnf_flat.reshape(n_simulations, n_drivers)
@@ -217,7 +242,25 @@ class RaceSimulator:
         for i, code in enumerate(driver_codes):
             ranks_arr = ranks[:, i]
             dnf_arr = dnf_matrix[:, i]
+
+            # Rango CONDICIONADO A TERMINAR. Mezclar abandonos dentro del
+            # intervalo lo vuelve inutil: un piloto con 13% de abandono
+            # arrastra el percentil 90 al fondo de la parrilla, y el
+            # resultado ("entre P1 y P18") no dice nada. Separar las dos
+            # preguntas -- donde acaba si termina, y que probabilidad hay de
+            # que no termine -- informa mucho mas con los mismos datos.
+            finished = ranks_arr[~dnf_arr]
+            if finished.size:
+                p10_fin = float(np.percentile(finished, 10))
+                p90_fin = float(np.percentile(finished, 90))
+                median_fin = float(np.median(finished))
+            else:
+                p10_fin = p90_fin = median_fin = float("nan")
+
             results.append({
+                "p10_if_finishes": p10_fin,
+                "p90_if_finishes": p90_fin,
+                "median_if_finishes": median_fin,
                 "driver_code": code,
                 "p_win": float((ranks_arr == 1).mean()),
                 "p_podium": float((ranks_arr <= 3).mean()),
