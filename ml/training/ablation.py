@@ -26,17 +26,18 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import xgboost as xgb
-from sklearn.metrics import roc_auc_score
 
 from ml.common.logging_conf import configure
+from ml.features.build_features import FEATURES_PATH
 from ml.training.anchor import QUALI_FEATURES, REGIME_POST_QUALI, REGIME_PRE_QUALI
 from ml.training.train import (
-    FEATURES_PATH,
+    TARGETS,
     TRAIN_YEARS,
     VAL_YEAR,
+    _auc,
     _feature_cols,
     _prepare,
+    fit_classifier,
     fit_regressor,
     predict_position,
     regressor_metrics,
@@ -88,15 +89,9 @@ def _evaluate_regime(train: pd.DataFrame, val: pd.DataFrame, feature_cols: list[
         "residual_std": m["residual_std_val_2025"],
     }
 
-    for target in ["podium", "points", "dnf"]:
-        clf = xgb.XGBClassifier(
-            n_estimators=300, max_depth=4, learning_rate=0.05,
-            tree_method="hist", enable_categorical=True, random_state=42,
-        )
-        clf.fit(train_b[feature_cols], train_b[f"y_{target}"])
-        proba = clf.predict_proba(val_b[feature_cols])[:, 1]
-        y_true = val_b[f"y_{target}"]
-        result[f"auc_{target}"] = float(roc_auc_score(y_true, proba)) if y_true.nunique() > 1 else None
+    for target in TARGETS:
+        clf = fit_classifier(train_b, feature_cols, target)
+        result[f"auc_{target}"] = _auc(val_b[f"y_{target}"], clf.predict_proba(val_b[feature_cols])[:, 1])
 
     # Aciertos de podio: de los 3 primeros predichos por carrera, cuantos
     # estuvieron de verdad en el podio. Mas legible que el AUC.

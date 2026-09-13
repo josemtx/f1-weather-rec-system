@@ -48,7 +48,7 @@ def _pace_percentile_and_consistency(laps: pd.DataFrame) -> pd.DataFrame:
     return per_driver
 
 
-def _team_pace_trend(db, laps: pd.DataFrame, context_df: pd.DataFrame) -> pd.DataFrame:
+def _team_pace_trend(laps: pd.DataFrame, context_df: pd.DataFrame) -> pd.DataFrame:
     driver_team = context_df[["driver_code", "circuit_short_name", "race_date", "constructor_id"]].drop_duplicates()
     team_laps = laps.merge(driver_team, on=["driver_code", "circuit_short_name", "race_date"], how="inner")
 
@@ -69,7 +69,7 @@ def build_dynamic_pace(db, context_df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame(index=context_df.index, columns=cols)
 
     pace = _pace_percentile_and_consistency(laps)
-    team_trend = _team_pace_trend(db, laps, context_df)
+    team_trend = _team_pace_trend(laps, context_df)
 
     df = context_df.merge(pace, on=["driver_code", "circuit_short_name", "race_date"], how="left")
     df = df.merge(team_trend, on=["constructor_id", "circuit_short_name", "race_date"], how="left")

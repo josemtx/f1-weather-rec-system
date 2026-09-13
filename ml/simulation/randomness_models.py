@@ -4,7 +4,6 @@ Cada funcion aisla UNA fuente de incertidumbre para que monte_carlo.py pueda
 componerlas sin acoplarse a como se estima cada una.
 """
 
-import numpy as np
 import pandas as pd
 
 RAIN_THRESHOLD_MM = 1.0
@@ -64,12 +63,3 @@ def safety_car_shock_scale(circuit_type: str) -> float:
     Proxy documentado por tipo de circuito -- ver limitacion en el plan
     (pendiente ingesta de race_control)."""
     return _SAFETY_CAR_PROXY.get(circuit_type, 0.5)
-
-
-def sample_dnf_flags(dnf_probs: np.ndarray, rng: np.random.Generator) -> np.ndarray:
-    return rng.random(len(dnf_probs)) < dnf_probs
-
-
-def sample_pit_duration_jitter(std: float | None, rng: np.random.Generator, n: int) -> np.ndarray:
-    std = std if std and std > 0 else DEFAULT_PIT_STD
-    return rng.normal(loc=0.0, scale=std, size=n)

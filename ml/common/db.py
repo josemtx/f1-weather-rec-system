@@ -1,9 +1,11 @@
 """Conexion compartida a MongoDB para todo el subsistema ml/.
 
-Reutiliza el mismo par de variables de entorno que python-app/server.py
-(MONGODB_URI / MONGODB_DB), no las usadas en el lado Java (MONGO_HOST/PORT/DB).
-Carga .env si existe (los scripts de ml/ se ejecutan manualmente, a diferencia
-de server.py que ya recibe el entorno del proceso que lo lanza).
+Lee MONGODB_URI / MONGODB_DB (no las variables MONGO_HOST/PORT/DB del lado
+Java). Carga .env si existe, porque los scripts de ml/ se ejecutan a mano.
+
+MONGODB_DB no tiene valor por defecto a proposito: un default silencioso
+apuntando a la base vieja (`F1-WeatherRec`) causo el incidente del
+2026-09-11 (ver ARCHITECTURE.md). Es preferible fallar al arrancar.
 """
 
 import logging
@@ -24,10 +26,12 @@ _client: MongoClient | None = None
 
 def get_db() -> Database:
     global _client
+    db_name = os.getenv("MONGODB_DB")
+    if not db_name:
+        raise RuntimeError("MONGODB_DB no esta definida (ponla en .env, p.ej. F1-WeatherRec-Prod)")
     if _client is None:
         mongo_uri = os.getenv("MONGODB_URI", "mongodb://localhost:27017/")
-        mongo_db_name = os.getenv("MONGODB_DB", "F1-WeatherRec")
         _client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
         _client.admin.command("ping")
-        logger.info(f"Conectado a MongoDB en {mongo_uri} (db={mongo_db_name})")
-    return _client[os.getenv("MONGODB_DB", "F1-WeatherRec")]
+        logger.info(f"Conectado a MongoDB en {mongo_uri} (db={db_name})")
+    return _client[db_name]

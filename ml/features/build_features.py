@@ -1,4 +1,4 @@
-"""Orquestador de feature engineering -> ml/data/processed/features_<version>.parquet
+"""Orquestador de feature engineering -> ml/data/processed/features_v3.parquet
 
 Une context (A) + driver_form (B) + team_form (C) + circuit_priors (D) +
 climate (E) + tyre_strategy (F) + dynamic_pace (G) + qualifying (H) +
@@ -32,8 +32,11 @@ from ml.features.upcoming import build_stub_rows
 
 logger = logging.getLogger(__name__)
 
-OUT_DIR = Path(__file__).resolve().parents[1] / "data" / "processed"
-VERSION = "v3"
+FEATURES_PATH = Path(__file__).resolve().parents[1] / "data" / "processed" / "features_v3.parquet"
+
+# Columnas que XGBoost trata como categoricas. El simulador las fija a las
+# categorias vistas en entrenamiento (RaceSimulator._prep_categoricals).
+CATEGORICAL_COLS = ["circuit_short_name", "circuit_type", "overtaking_difficulty", "era_data_tier", "driver_code", "constructor_id"]
 
 
 def build_feature_matrix(db, upcoming: tuple[int, int] | None = None) -> pd.DataFrame:
@@ -107,11 +110,10 @@ def build_feature_matrix(db, upcoming: tuple[int, int] | None = None) -> pd.Data
 
 
 def save_feature_matrix(features: pd.DataFrame) -> Path:
-    OUT_DIR.mkdir(parents=True, exist_ok=True)
-    out_path = OUT_DIR / f"features_{VERSION}.parquet"
-    features.to_parquet(out_path, index=False)
-    logger.info(f"Guardado {out_path} ({len(features)} filas, {len(features.columns)} columnas)")
-    return out_path
+    FEATURES_PATH.parent.mkdir(parents=True, exist_ok=True)
+    features.to_parquet(FEATURES_PATH, index=False)
+    logger.info(f"Guardado {FEATURES_PATH} ({len(features)} filas, {len(features.columns)} columnas)")
+    return FEATURES_PATH
 
 
 def main():

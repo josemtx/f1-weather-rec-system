@@ -9,7 +9,6 @@ ver ml/training/train.py donde se ajusta y valida.
 """
 
 import json
-import math
 from pathlib import Path
 
 import numpy as np

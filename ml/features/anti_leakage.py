@@ -108,20 +108,3 @@ def expanding_count_shifted(df: pd.DataFrame, group_col: str, date_col: str) -> 
     ordered = _sorted(df, group_col, date_col)
     counts = ordered.groupby(group_col).cumcount()
     return counts.reindex(df.index)
-
-
-def assert_no_leakage(
-    df: pd.DataFrame,
-    group_col: str,
-    date_col: str,
-    feature_col: str,
-    max_source_date_col: str,
-) -> None:
-    """Verifica que la fuente maxima de una rolling feature sea siempre anterior
-    a la fecha de la carrera actual. Usado por ml/tests/test_features_no_leakage.py."""
-    violation = df[df[max_source_date_col] >= df[date_col]]
-    if not violation.empty:
-        raise AssertionError(
-            f"Fuga temporal en '{feature_col}': {len(violation)} filas usan datos "
-            f"de fecha >= fecha de carrera. Ejemplo: {violation.iloc[0].to_dict()}"
-        )

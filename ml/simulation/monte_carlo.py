@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from ml.features.build_features import CATEGORICAL_COLS
 from ml.simulation.randomness_models import (
     DEFAULT_PIT_STD,
     climate_variability,
@@ -36,8 +37,6 @@ from ml.training.model_registry import (
 )
 
 logger = logging.getLogger(__name__)
-
-CATEGORICAL_COLS = ["circuit_short_name", "circuit_type", "overtaking_difficulty", "era_data_tier", "driver_code", "constructor_id"]
 
 # Respaldo si el modelo no trae metrics.json (modelos antiguos): orden de
 # magnitud del error tipico observado, ~3-4 posiciones.
@@ -151,87 +150,38 @@ class RaceSimulator:
         anchor = np.tile(anchor_for(race_features, regime).to_numpy(dtype=float), n_simulations)
         return reg.predict(blank_quali_features(X, regime)) + anchor, residual_std * RESIDUAL_SCALE[regime]
 
-    def simulate_race(
-        self, race_features: pd.DataFrame, n_simulations: int = 2000, seed: int = 42
-    ) -> pd.DataFrame:
-        """race_features: una fila por piloto con al menos self.feature_cols +
-        driver_code + circuit_short_name + circuit_type + race_date. Devuelve
-        un DataFrame con probabilidades agregadas por piloto tras N simulaciones."""
-        race_features = race_features.reset_index(drop=True)
-        # Los codigos se capturan ANTES de fijar categorias: _prep_categoricals
-        # convierte en NaN las no vistas en entrenamiento, y driver_code es una
-        # de ellas. El modelo debe recibir NaN (no conoce a un debutante), pero
-        # el resultado tiene que seguir identificandolo por su nombre.
-        driver_codes = race_features["driver_code"].to_numpy()
-        race_features = fill_grid_from_quali(self._prep_categoricals(race_features))
-        n_drivers = len(race_features)
-        rng = np.random.default_rng(seed)
-
-        circuit_short_name = race_features["circuit_short_name"].iloc[0]
-        circuit_type = race_features["circuit_type"].iloc[0]
-        month = pd.to_datetime(race_features["race_date"].iloc[0]).month
-
-        climate_std = climate_variability(self.db, circuit_short_name, month)
-        sc_scale = safety_car_shock_scale(circuit_type)
-
-        # Probabilidad de lluvia: si la fila trae la del propio pronostico
-        # (`pop` de OpenWeatherMap, carreras futuras), se usa esa -- es una
-        # estimacion del dia concreto, no la frecuencia historica del mes.
-        # Si no, se cae a la climatologia del circuito.
-        forecast_rain_p = None
+    def _rain_probability(self, race_features: pd.DataFrame, circuit_short_name: str, month: int) -> float:
+        """La del pronostico del dia (`pop` de OpenWeatherMap, carreras futuras)
+        si la fila la trae; si no, la climatologia del circuito para ese mes."""
         if "forecast_rain_probability" in race_features.columns:
             values = pd.to_numeric(race_features["forecast_rain_probability"], errors="coerce").dropna()
             if not values.empty:
-                forecast_rain_p = float(values.max())
+                logger.info(f"Lluvia muestreada del pronostico: p={float(values.max()):.2f}")
+                return float(values.max())
+        return rain_probability(self.db, circuit_short_name, month)
 
-        if forecast_rain_p is not None:
-            rain_p = forecast_rain_p
-            logger.info(f"Lluvia muestreada del pronostico: p={rain_p:.2f}")
-        else:
-            rain_p = rain_probability(self.db, circuit_short_name, month)
+    @staticmethod
+    def _perturb(X: pd.DataFrame, rng, n_simulations: int, n_drivers: int,
+                 climate_std: dict, rain_p: float, pit_std: np.ndarray) -> np.ndarray:
+        """Perturba in situ la parrilla apilada con las fuentes de aleatoriedad del
+        mundo y devuelve, por fila, si esa simulacion es una carrera con lluvia.
 
-        X_base = race_features[self.feature_cols]
-        base_dnf_raw = self.dnf_clf.predict_proba(X_base)[:, 1]
-        base_dnf_proba = apply_calibration(base_dnf_raw, self.dnf_cal["a"], self.dnf_cal["b"])
-
-        pit_std = (
-            race_features["team_pit_stop_duration_stddev_last5"].values
-            if "team_pit_stop_duration_stddev_last5" in race_features.columns
-            else np.full(n_drivers, np.nan)
-        )
-
-        # Todas las simulaciones se resuelven en UNA llamada al modelo en vez
-        # de una por simulacion: se apilan n_simulations copias de la parrilla
-        # y se perturban de forma vectorizada. La version en bucle hacia 5000
-        # predicciones de 22 filas y tardaba ~80s; asi son ~2s, que es lo que
-        # hace viable precalcular la rejilla de escenarios del sandbox.
-        #
-        # Orden de las filas: el indice de piloto cicla rapido y el de
-        # simulacion lento, asi que fila i -> sim = i // n_drivers.
-        row_index = np.tile(np.arange(n_drivers), n_simulations)
-        X = X_base.iloc[row_index].reset_index(drop=True)
-        total = n_simulations * n_drivers
-
+        Clima compartido por todos los pilotos de una misma simulacion (es la
+        misma carrera); jitter de boxes por piloto y simulacion, con la
+        variabilidad historica de SU equipo."""
         def per_sim(values):
-            """Un valor por simulacion, repetido para todos sus pilotos."""
             return np.repeat(values, n_drivers)
 
-        # Clima: compartido por todos los pilotos de una misma simulacion,
-        # porque es la misma carrera.
         temp_noise = per_sim(rng.normal(0, climate_std["temp_2m_avg"], size=n_simulations))
-        if "race_day_temp_avg" in X.columns:
-            X["race_day_temp_avg"] = X["race_day_temp_avg"].to_numpy(dtype=float) + temp_noise
-        if "race_day_temp_max" in X.columns:
-            X["race_day_temp_max"] = X["race_day_temp_max"].to_numpy(dtype=float) + temp_noise
+        for col in ("race_day_temp_avg", "race_day_temp_max"):
+            if col in X.columns:
+                X[col] = X[col].to_numpy(dtype=float) + temp_noise
 
-        is_rain_sim = rng.random(n_simulations) < rain_p
-        rain_rows = per_sim(is_rain_sim)
+        rain_rows = per_sim(rng.random(n_simulations) < rain_p)
         if "race_day_precipitation_mm" in X.columns:
             rain_mm = per_sim(rng.exponential(3.0, size=n_simulations))
             current = X["race_day_precipitation_mm"].to_numpy(dtype=float)
-            X["race_day_precipitation_mm"] = np.where(
-                rain_rows, np.maximum(current, rain_mm), current
-            )
+            X["race_day_precipitation_mm"] = np.where(rain_rows, np.maximum(current, rain_mm), current)
             if "climate_rain_probability_flag" in X.columns:
                 flag = X["climate_rain_probability_flag"].to_numpy(dtype=float)
                 X["climate_rain_probability_flag"] = np.where(rain_rows, 1.0, flag)
@@ -241,66 +191,27 @@ class RaceSimulator:
             X["race_day_humidity"] = X["race_day_humidity"].to_numpy(dtype=float) + hum_noise
         if "race_day_wind_speed" in X.columns:
             wind_noise = per_sim(rng.normal(0, climate_std["wind_speed_10m"], size=n_simulations))
-            X["race_day_wind_speed"] = np.maximum(
-                0.0, X["race_day_wind_speed"].to_numpy(dtype=float) + wind_noise
-            )
+            X["race_day_wind_speed"] = np.maximum(0.0, X["race_day_wind_speed"].to_numpy(dtype=float) + wind_noise)
 
-        # Estrategia: el jitter de boxes es por piloto y simulacion, con la
-        # variabilidad historica de SU equipo.
         if "team_avg_pit_stop_duration_last5" in X.columns:
-            std_per_row = np.tile(
-                np.array([s if s and s > 0 else DEFAULT_PIT_STD for s in pit_std], dtype=float),
-                n_simulations,
-            )
-            jitter = rng.normal(0.0, std_per_row)
+            std_per_row = np.tile(np.array([s if s and s > 0 else DEFAULT_PIT_STD for s in pit_std], dtype=float), n_simulations)
             X["team_avg_pit_stop_duration_last5"] = (
-                X["team_avg_pit_stop_duration_last5"].to_numpy(dtype=float) + jitter
+                X["team_avg_pit_stop_duration_last5"].to_numpy(dtype=float) + rng.normal(0.0, std_per_row)
             )
+        return rain_rows
 
-        dnf_flat = rng.random(total) < np.tile(base_dnf_proba, n_simulations)
-        # Shock adicional de fiabilidad bajo lluvia en circuitos propensos a
-        # SC/VSC (simplificacion documentada, no un modelo de SC por vuelta).
-        extra_dnf = (rng.random(total) < (0.05 * sc_scale)) & rain_rows
-        dnf_flat = dnf_flat | extra_dnf
-
-        scores, residual_sigma = self._predict_scores(race_features, X, n_simulations)
-        # Ruido residual: lo que el modelo NO sabe, calibrado con la
-        # dispersion real de su error en validacion.
-        scores = scores + rng.normal(0.0, residual_sigma, size=total)
-
-        scores = scores.reshape(n_simulations, n_drivers)
-        dnf_matrix = dnf_flat.reshape(n_simulations, n_drivers)
-
-        worst = np.maximum(scores.max(axis=1, keepdims=True), n_drivers) + 10.0
-        scores = np.where(dnf_matrix, worst + rng.random((n_simulations, n_drivers)), scores)
-
-        order = np.argsort(scores, axis=1)
-        ranks = np.empty_like(order)
-        np.put_along_axis(ranks, order, np.arange(1, n_drivers + 1), axis=1)
-
+    @staticmethod
+    def _summarise(driver_codes: np.ndarray, ranks: np.ndarray, dnf_matrix: np.ndarray) -> pd.DataFrame:
         results = []
         for i, code in enumerate(driver_codes):
-            ranks_arr = ranks[:, i]
-            dnf_arr = dnf_matrix[:, i]
-
+            ranks_arr, dnf_arr = ranks[:, i], dnf_matrix[:, i]
             # Rango CONDICIONADO A TERMINAR. Mezclar abandonos dentro del
-            # intervalo lo vuelve inutil: un piloto con 13% de abandono
-            # arrastra el percentil 90 al fondo de la parrilla, y el
-            # resultado ("entre P1 y P18") no dice nada. Separar las dos
-            # preguntas -- donde acaba si termina, y que probabilidad hay de
-            # que no termine -- informa mucho mas con los mismos datos.
+            # intervalo lo vuelve inutil: un 13% de abandono arrastra el P90 al
+            # fondo de la parrilla y "entre P1 y P18" no dice nada. Separar
+            # "donde acaba si termina" de "probabilidad de no terminar"
+            # informa mucho mas con los mismos datos.
             finished = ranks_arr[~dnf_arr]
-            if finished.size:
-                p10_fin = float(np.percentile(finished, 10))
-                p90_fin = float(np.percentile(finished, 90))
-                median_fin = float(np.median(finished))
-            else:
-                p10_fin = p90_fin = median_fin = float("nan")
-
             results.append({
-                "p10_if_finishes": p10_fin,
-                "p90_if_finishes": p90_fin,
-                "median_if_finishes": median_fin,
                 "driver_code": code,
                 "p_win": float((ranks_arr == 1).mean()),
                 "p_podium": float((ranks_arr <= 3).mean()),
@@ -310,6 +221,62 @@ class RaceSimulator:
                 "median_finish_position": float(np.median(ranks_arr)),
                 "p10_finish_position": float(np.percentile(ranks_arr, 10)),
                 "p90_finish_position": float(np.percentile(ranks_arr, 90)),
+                "median_if_finishes": float(np.median(finished)) if finished.size else float("nan"),
+                "p10_if_finishes": float(np.percentile(finished, 10)) if finished.size else float("nan"),
+                "p90_if_finishes": float(np.percentile(finished, 90)) if finished.size else float("nan"),
             })
-
         return pd.DataFrame(results).sort_values("mean_finish_position").reset_index(drop=True)
+
+    def simulate_race(self, race_features: pd.DataFrame, n_simulations: int = 2000, seed: int = 42) -> pd.DataFrame:
+        """race_features: una fila por piloto con al menos self.feature_cols +
+        driver_code + circuit_short_name + circuit_type + race_date. Devuelve
+        un DataFrame con probabilidades agregadas por piloto tras N simulaciones."""
+        race_features = race_features.reset_index(drop=True)
+        # Los codigos se capturan ANTES de fijar categorias: un debutante se
+        # convierte en NaN para el modelo, pero el resultado debe seguir
+        # identificandolo por su nombre.
+        driver_codes = race_features["driver_code"].to_numpy()
+        race_features = fill_grid_from_quali(self._prep_categoricals(race_features))
+        n_drivers = len(race_features)
+        total = n_simulations * n_drivers
+        rng = np.random.default_rng(seed)
+
+        circuit_short_name = race_features["circuit_short_name"].iloc[0]
+        month = pd.to_datetime(race_features["race_date"].iloc[0]).month
+        climate_std = climate_variability(self.db, circuit_short_name, month)
+        sc_scale = safety_car_shock_scale(race_features["circuit_type"].iloc[0])
+        rain_p = self._rain_probability(race_features, circuit_short_name, month)
+
+        X_base = race_features[self.feature_cols]
+        base_dnf_proba = apply_calibration(self.dnf_clf.predict_proba(X_base)[:, 1], self.dnf_cal["a"], self.dnf_cal["b"])
+        pit_std = (
+            race_features["team_pit_stop_duration_stddev_last5"].to_numpy()
+            if "team_pit_stop_duration_stddev_last5" in race_features.columns
+            else np.full(n_drivers, np.nan)
+        )
+
+        # Todas las simulaciones en UNA llamada al modelo: se apilan
+        # n_simulations copias de la parrilla (piloto cicla rapido, simulacion
+        # lento: fila i -> sim i // n_drivers) y se perturban vectorizadas.
+        # En bucle eran ~80 s; asi ~2 s, lo que hace viable la rejilla del sandbox.
+        X = X_base.iloc[np.tile(np.arange(n_drivers), n_simulations)].reset_index(drop=True)
+        rain_rows = self._perturb(X, rng, n_simulations, n_drivers, climate_std, rain_p, pit_std)
+
+        dnf_flat = rng.random(total) < np.tile(base_dnf_proba, n_simulations)
+        # Shock adicional de fiabilidad bajo lluvia en circuitos propensos a
+        # SC/VSC (simplificacion documentada, no un modelo de SC por vuelta).
+        dnf_flat |= (rng.random(total) < (0.05 * sc_scale)) & rain_rows
+
+        scores, residual_sigma = self._predict_scores(race_features, X, n_simulations)
+        # Ruido residual: lo que el modelo NO sabe, calibrado con la
+        # dispersion real de su error en validacion.
+        scores = (scores + rng.normal(0.0, residual_sigma, size=total)).reshape(n_simulations, n_drivers)
+        dnf_matrix = dnf_flat.reshape(n_simulations, n_drivers)
+
+        worst = np.maximum(scores.max(axis=1, keepdims=True), n_drivers) + 10.0
+        scores = np.where(dnf_matrix, worst + rng.random((n_simulations, n_drivers)), scores)
+        order = np.argsort(scores, axis=1)
+        ranks = np.empty_like(order)
+        np.put_along_axis(ranks, order, np.arange(1, n_drivers + 1), axis=1)
+
+        return self._summarise(driver_codes, ranks, dnf_matrix)

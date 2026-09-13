@@ -1,9 +1,8 @@
 """De donde sale el MAE: descomposicion del error del regresor sobre 2025.
 
-Antes de tocar el modelo (objetivo de ranking, abandonos, libres...) conviene
-saber que parte del error es atacable por cada palanca. Se reentrena la misma
-receta que ablation.py (train 2023-24, val 2025, sin early stopping sobre val)
-y se descompone el error absoluto:
+Antes de tocar el modelo conviene saber que parte del error es atacable por
+cada palanca. Se entrena la receta de train.py (regimen post_quali, train
+2023-24, val 2025) y se descompone el error absoluto:
 
   - por si el piloto termino o abandono (cuanto MAE es "culpa" del DNF)
   - por tramo de posicion real (cabeza / puntos / pelotón / cola)
@@ -21,27 +20,19 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import xgboost as xgb
 from scipy.stats import spearmanr
 from sklearn.metrics import mean_absolute_error
 
 from ml.common.logging_conf import configure
-from ml.training.train import FEATURES_PATH, TRAIN_YEARS, VAL_YEAR, _feature_cols, _prepare
+from ml.features.build_features import FEATURES_PATH
+from ml.training.anchor import REGIME_POST_QUALI
+from ml.training.train import TRAIN_YEARS, VAL_YEAR, _feature_cols, _prepare, fit_regressor, predict_position
 
 logger = logging.getLogger(__name__)
 
 OUT_PATH = Path(__file__).resolve().parents[1] / "models" / "residual_diagnosis.json"
 
 POSITION_BUCKETS = [(1, 3, "P1-3"), (4, 10, "P4-10"), (11, 15, "P11-15"), (16, 20, "P16-20")]
-
-
-def _fit_predict(train: pd.DataFrame, val: pd.DataFrame, feature_cols: list[str]) -> np.ndarray:
-    reg = xgb.XGBRegressor(
-        n_estimators=300, max_depth=5, learning_rate=0.05,
-        tree_method="hist", enable_categorical=True, random_state=42,
-    )
-    reg.fit(train[feature_cols], train["y_finish_position"])
-    return reg.predict(val[feature_cols])
 
 
 def _rank_within_race(df: pd.DataFrame, col: str) -> pd.Series:
@@ -70,7 +61,7 @@ def main():
     train = df[df["year"].isin(TRAIN_YEARS)]
     val = df[df["year"] == VAL_YEAR].copy()
 
-    val["pred"] = _fit_predict(train, val, feature_cols)
+    val["pred"] = predict_position(fit_regressor(train, feature_cols, REGIME_POST_QUALI), val, feature_cols, REGIME_POST_QUALI)
     val["y"] = val["y_finish_position"]
     val["abs_err"] = (val["pred"] - val["y"]).abs()
     val["pred_rank"] = _rank_within_race(val, "pred")

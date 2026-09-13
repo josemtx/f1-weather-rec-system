@@ -1,7 +1,7 @@
 """Ancla del regresor: la mejor estimacion "gratis" de la posicion final.
 
 El regresor no predice la posicion absoluta sino la DIFERENCIA respecto a un
-ancla. Motivo medido (residual_diagnosis.py, experiment_anchor.py): con
+ancla. Motivo medido (residual_diagnosis.py, 2026-09-12): con
 ~900 filas los arboles no aprenden bien la identidad parrilla -> llegada, y
 el modelo que predecia posicion absoluta no mejoraba a "predecir = parrilla"
 (2024: 3.47 vs 2.91; 2025: 3.36 vs 3.34). Regalandole el ancla, el suelo del
