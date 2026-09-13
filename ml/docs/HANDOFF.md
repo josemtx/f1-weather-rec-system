@@ -1,6 +1,6 @@
 # HANDOFF — estado del proyecto y cómo retomarlo
 
-Última actualización: **2026-09-13, ~23:00 UTC** (domingo, tras el GP de Madrid).
+Última actualización: **2026-09-13, ~23:20 UTC** (domingo, tras el GP de Madrid y la limpieza del repo).
 Escrito para que la siguiente sesión arranque sin releer todo el historial.
 
 ---
@@ -28,7 +28,6 @@ en cada comando Java; Python lo lee de `.env`.
 | Features | 92 columnas / 80 entrenables, 10 categorías (A-J). Anti-fuga estructural (`shift(1)`), tests. Filas "fantasma" para carreras futuras (`ml/features/upcoming.py`). Temperatura de asfalto estimada por circuito para futuras. |
 | Modelos | Dos con roles distintos en `ml/models/registry.json`: `evaluation` (train 2023-24, val 2025 — métricas creíbles) y `production` (2023-25 — el que predice). MAE 3.28, AUC podio 0.948. Categorías no vistas (novatos, circuitos nuevos) → NaN sin fallar. |
 | Predicciones | `ml/predictions/predict_race.py` genera y **persiste** en Mongo `predictions` con régimen (pre_quali/post_sprint/post_quali) deducido automáticamente. Se niega a escribir sobre carreras ya disputadas (integridad del track record). |
-| API/Dashboard viejo | Flask blueprint `/ml/*` + Streamlit (diagnóstico interno). Siguen funcionando. |
 
 ---
 
@@ -50,7 +49,6 @@ Ficheros clave de esos commits, por si hay que tocarlos:
 - `ml/training/calibrate_simulation.py` — verifica cobertura 80% del intervalo P10-P90
 - `ml/tests/test_simulator_identity.py` — driver_code no se pierde al anular categorías no vistas
 - `ml/dashboard/{export_data,nerd_data,circuit_art}.py` + `ml/dashboard/web/` — dashboard estático
-- `ml/ingestion/circuit_trace.py` — APARCADO (ver §6), commiteado como herramienta documentada
 - `svg/` — 25 siluetas oficiales F1.com aportadas por el usuario
 
 Tests: 24/24 en verde (`./venv/Scripts/python.exe -m pytest ml/tests/ -q`).
@@ -107,7 +105,7 @@ relanzar el chequeo a mano.
 
 **Estado 13/09 ~22:40 UTC**: el experimento está cerrado (resultado real leído de OpenF1 para el análisis;
 la ingesta canónica por Jolpica sigue pendiente porque volvió a caerse — un cron de sesión la espera para
-cerrar el track record y republicar). El registry apunta ya a `2026-09-13_{modelB,production}` (receta
+cerrar el track record y republicar). El registry apunta ya a `2026-09-13_{modelB,production}` (desde el 13/09 noche las versiones se llaman `_evaluation` / `_production`) (receta
 anclada); ablación y calibración regeneradas con ella. Lo que sigue es el diseño y las cifras originales.
 
 **Resultado de Madrid** (18 finalizadores; ANT ganó desde P2, VER 2º, NOR 3º, HAM DNF en la vuelta 6):
@@ -181,8 +179,14 @@ mueve las probabilidades (el clima apenas: 0.06 puestos). Natural tras la clasif
 
 ## 6. Decisiones y lecciones que no hay que redescubrir
 
-- **No dibujar circuitos por telemetría.** El usuario aportó los SVG oficiales; `circuit_trace.py`
-  funciona pero quedó aparcado. Lección guardada en memoria: comprobar si existe una fuente simple
+- **Limpieza del 13/09 (refactor)**: se eliminaron la app Flask+PyQt original (`python-app/`, `ml/api/`),
+  Streamlit (`ml/dashboard/app.py`) y los scripts de un solo uso (`circuit_trace`, `reparse_era5`,
+  `experiment_anchor`). El escaparate es solo el dashboard estático. `FEATURES_PATH` y `CATEGORICAL_COLS`
+  viven en `ml/features/build_features.py`; `get_db()` exige `MONGODB_DB` en `.env` (sin default: el default
+  a la base vieja fue el incidente del 11/09); el jar Java también apunta por defecto a `-Prod`.
+
+- **No dibujar circuitos por telemetría.** El usuario aportó los SVG oficiales; la herramienta que
+  trazaba circuitos desde GPS (commit 224a136) funcionaba pero se eliminó en la limpieza del 13/09. Lección guardada en memoria: comprobar si existe una fuente simple
   antes de construir algo elaborado.
 - **Clima aporta poco** al modelo (0.06 puestos). Es un resultado honesto, documentado en el dashboard,
   no un fallo a arreglar. Sensores de pista mejoraron algo; interacciones piloto×clima ya están.
