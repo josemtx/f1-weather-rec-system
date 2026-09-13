@@ -145,7 +145,13 @@ Es decir: conocer la parrilla vale ~0.5 puestos de precision.
   ya se ingiere a diario) para predecir una carrera de mañana es trabajo
   pendiente, igual que decidir qué hacer con `grid_position` antes de que
   exista (predicción previa a clasificación).
-- **Interacción explícita piloto×clima**: XGBoost puede aprender
-  interacciones implícitas entre features, pero no hay una feature
-  dedicada tipo "rendimiento histórico de este piloto en lluvia" todavía
-  (fase 2 acordada, después de validar clasificación/sprint).
+- **Interacción explícita piloto×clima**: implementada como categoría J
+  (`weather_interaction.py`: media en mojado/seco/calor y sus deltas, por
+  piloto y equipo). Aporta ~0.06 puestos: con ~5% de carreras mojadas hay
+  3-4 en el train, y es un techo de datos, no de diseño.
+- **El regresor no supera a la parrilla si predice posicion absoluta**
+  (medido el 2026-09-12 con `residual_diagnosis.py`: 2024 3.47 vs 2.91,
+  2025 3.36 vs 3.34). Por eso predice deltas frente a un ancla, solo con
+  finalizadores y con objetivo MAE (`ml/training/anchor.py`, `train.py`).
+  Pre-clasificacion sigue valiendo lo que su ancla (ritmo reciente); la
+  ganancia real esta en el regimen post-clasificacion (-0.4 puestos en 2025).

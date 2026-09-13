@@ -1,6 +1,6 @@
 # HANDOFF — estado del proyecto y cómo retomarlo
 
-Última actualización: **2026-09-12, ~17:20 UTC** (sábado del GP de Madrid).
+Última actualización: **2026-09-13, ~22:45 UTC** (domingo, tras el GP de Madrid).
 Escrito para que la siguiente sesión arranque sin releer todo el historial.
 
 ---
@@ -34,8 +34,10 @@ en cada comando Java; Python lo lee de `.env`.
 
 ## 3. Estado de git
 
-**Todo commiteado, árbol limpio** (14 commits en `main`, sin subir a remoto). Los últimos cuatro
-(2026-09-12 tarde) cierran la sesión:
+**Trabajo del 12-13/09 SIN commitear** (ver §4b): `ml/training/{anchor,residual_diagnosis,experiment_anchor}.py`
+y `ml/tests/test_anchor.py` nuevos; `train.py`, `ablation.py`, `calibrate_simulation.py`, `model_registry.py`,
+`monte_carlo.py`, `driver_form.py` y ambos docs modificados. Tests 24/24 en verde. Todo lo anterior está en 14 commits en
+`main`, sin subir a remoto. Los últimos cuatro (2026-09-12 tarde):
 
 ```
 358ddda Add session handoff document
@@ -52,20 +54,20 @@ Ficheros clave de esos commits, por si hay que tocarlos:
 - `ml/ingestion/circuit_trace.py` — APARCADO (ver §6), commiteado como herramienta documentada
 - `svg/` — 25 siluetas oficiales F1.com aportadas por el usuario
 
-Tests: 19/19 en verde (`./venv/Scripts/python.exe -m pytest ml/tests/ -q`).
+Tests: 24/24 en verde (`./venv/Scripts/python.exe -m pytest ml/tests/ -q`).
 `git push` no se ha hecho nunca en esta sesión — decisión del usuario.
 
 ---
 
-## 4. EL EXPERIMENTO PENDIENTE (con hora límite: carrera domingo 13/09 13:00 UTC)
+## 4. EL EXPERIMENTO DE MADRID — CERRADO (análisis en §4b)
 
-Diseñado ayer, a medias ejecutado hoy. Compara tres predicciones de Madrid contra la realidad:
+Compara tres predicciones de Madrid contra la realidad:
 
 | Momento | Estado |
 |---|---|
 | **Pre-clasificación** | ✅ Registrada 12/09 09:33 UTC (régimen `pre_quali`, modelo `2026-09-12_production`, clima pronóstico). VER 22.5% victoria. |
-| **Post-clasificación** | ⏳ **PENDIENTE.** Quali fue 14:00-15:00 UTC. A las 17:03 UTC Jolpica aún no la publicaba. |
-| **Resultado real** | ⏳ Domingo tras la carrera. |
+| **Post-clasificación** | ✅ Registrada 12/09 21:41 UTC (mismo modelo, régimen `post_quali`). VER 53% victoria, ANT 12%. |
+| **Resultado real** | ✅ ANT gana desde P2, VER 2º, NOR 3º. Leído de OpenF1 para el análisis; ingesta Jolpica pendiente (caído). |
 
 ### Cómo ejecutar el paso post-clasificación (cuando Jolpica la tenga)
 
@@ -94,6 +96,60 @@ La pestaña Honestidad mostrará pre vs post vs real. La ablación ya predice la
 
 **Nota**: OpenF1 SÍ tiene ya la sesión de clasificación (session_key 11365, con vueltas), pero
 por diseño la fuente canónica de grid/quali es Jolpica (consistencia 2018-2026). No mezclar.
+
+**Estado a las 22:45 UTC del sábado**: Jolpica lleva caído desde ~17:00 (timeout de conexión a sus
+IPs de Cloudflare; el usuario lo confirmó desde el navegador). Hay un cron de sesión cada 20 min
+que ejecuta los pasos 1-4 solo cuando responda con `Races` no vacío. Si la sesión se cerró, hay que
+relanzar el chequeo a mano.
+
+---
+
+## 4b. Regresor anclado — ACTIVADO el 13/09 tras cerrar el experimento
+
+**Estado 13/09 ~22:40 UTC**: el experimento está cerrado (resultado real leído de OpenF1 para el análisis;
+la ingesta canónica por Jolpica sigue pendiente porque volvió a caerse — un cron de sesión la espera para
+cerrar el track record y republicar). El registry apunta ya a `2026-09-13_{modelB,production}` (receta
+anclada); ablación y calibración regeneradas con ella. Lo que sigue es el diseño y las cifras originales.
+
+**Resultado de Madrid** (18 finalizadores; ANT ganó desde P2, VER 2º, NOR 3º, HAM DNF en la vuelta 6):
+parrilla sola MAE 1.35 y podio 3/3 (carrera muy ordenada); pre-quali registrada 4.21 (2/3); post-quali
+registrada 2.32 (3/3, favorito VER 53% — ANT 12%). Con el arreglo de parrilla de abajo, el modelo nuevo
+habría dado 2.03 y podio 3/3 con NOR favorito.
+
+**Arreglo importante encontrado en el análisis** (`anchor.fill_grid_from_quali`, aplicado en el simulador):
+en una carrera futura `grid_position` llega en NaN (la parrilla oficial no existe hasta el domingo) y los
+modelos nunca vieron ese NaN → una predicción post-clasificación hecha en vivo rendía como pre-clasificación
+(3.79 sobre 2025 vs 2.49 del backtest). Rellenar con la posición de clasificación devuelve 2.46. Afectaba
+también al modelo viejo y a los clasificadores. Test en `ml/tests/test_anchor.py`.
+
+**Medido y descartado el 13/09**: quitar `driver_code`/`constructor_id` (la identidad no ayuda ni perjudica,
+±0.03) — la infravaloración de ANT no viene de ahí sino del NaN de parrilla y de su P15 en la ventana de ritmo.
+
+Mientras Jolpica estaba caído se diagnosticó el error del modelo (`ml/training/residual_diagnosis.py`)
+y salió lo importante: **el regresor no superaba a "predecir = parrilla"** (2024: 3.47 vs 2.91;
+2025: 3.36 vs 3.34). La nueva receta (`ml/training/anchor.py` + `train.py`) predice el delta frente a
+un ancla, solo con finalizadores y con objetivo MAE; dos regresores, uno por régimen:
+
+| Régimen | Ancla | MAE finalizadores 2025: viejo → nuevo | Ancla sola |
+|---|---|---|---|
+| post_quali | parrilla (o posición de clasificación) | 2.89 → **2.48** | 2.88 |
+| pre_quali | `driver_avg_finish_when_finished_last5` (ritmo, solo carreras corridas enteras) | 3.41 → **3.11** | 3.07 |
+
+Pre-quali el modelo **empata con su ancla**: sin parrilla no sabe más que el ritmo reciente. Es honesto.
+Nueva feature en `driver_form.py` (93 columnas / 81 entrenables). `RESIDUAL_SCALE` es ahora por régimen
+`{post: 0.5, pre: 0.8}`, ambos medidos (cobertura 80.4% / 81.0%).
+
+**Pendiente cuando Jolpica vuelva** (lo hace el cron de sesión, o a mano):
+
+```bash
+./venv/Scripts/python.exe -m ml.jolpica.ingest_jolpica 2026        # resultado real de Madrid -> cierra el track record
+./venv/Scripts/python.exe -m ml.dashboard.export_data               # next_race pasa a la ronda 15, ya con el modelo nuevo
+# republicar el artefacto fc54c822-cfad-4491-947e-3e44d2243699 (index.html + data.json)
+```
+
+Pendiente en el dashboard tras el cambio: mostrar el **MAE frente al ancla** ("el modelo vs. simplemente
+la parrilla") en Honestidad — `metrics.json` ya trae `mae_ancla_val_2025` y el bloque `finish_position_pre_quali`,
+`export_data.build_model_payload` aún no los exporta. Va con la ronda de feedback de la v6.
 
 ---
 
@@ -142,9 +198,11 @@ mueve las probabilidades (el clima apenas: 0.06 puestos). Natural tras la clasif
 
 ## 7. Siguientes pasos, en orden
 
-1. **Commitear** lo de §3.
-2. **Ejecutar el experimento** de §4 en cuanto Jolpica publique la clasificación.
-3. Domingo: cerrar el experimento con el resultado real.
-4. Recoger feedback del usuario sobre el dashboard v6 y ajustar.
-5. Fase C (del plan original): automatización tras carrera, README del repo, Makefile, GitHub Pages.
-6. Opcionales con valor: palanca de parrilla en sandbox; ingesta de libres (FP2 long runs); `race_control` para safety cars (DNF AUC 0.53 es el punto débil).
+1. **Commitear** lo de §3 (regresor anclado + relleno de parrilla, ya activos).
+2. Cuando Jolpica vuelva: ingesta 2026 → `export_data` → republicar (§4b).
+3. Recoger feedback del usuario sobre el dashboard v6 y ajustar (incluye mostrar "modelo vs ancla").
+4. Fase C (del plan original): automatización tras carrera, README del repo, Makefile, GitHub Pages.
+5. Opcionales con valor: palanca de parrilla en sandbox (ahora natural: el modelo ya predice deltas frente a ella);
+   ingesta de libres (FP2 long runs — la única fuente de información nueva pre-quali). Descartado con datos:
+   red neuronal (no es un problema de capacidad); `race_control` para DNF (los abandonos de 2025 son DSQ y
+   averías desde delante, impredecibles a nivel individual; el dado del simulador ya los trata).
