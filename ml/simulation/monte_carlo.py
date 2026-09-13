@@ -19,6 +19,14 @@ from ml.simulation.randomness_models import (
     rain_probability,
     safety_car_shock_scale,
 )
+from ml.training.anchor import (
+    REGIME_POST_QUALI,
+    REGIME_PRE_QUALI,
+    anchor_for,
+    blank_quali_features,
+    fill_grid_from_quali,
+    regime_for,
+)
 from ml.training.model_registry import (
     apply_calibration,
     get_production_dir,
@@ -35,22 +43,23 @@ CATEGORICAL_COLS = ["circuit_short_name", "circuit_type", "overtaking_difficulty
 # magnitud del error tipico observado, ~3-4 posiciones.
 DEFAULT_RESIDUAL_STD = 3.5
 
-# El ruido inyectado NO es el error medido en bruto, sino la mitad.
+# El ruido inyectado NO es el error medido en bruto, sino una fraccion.
 #
 # Motivo: al ruido se le suma el efecto de REORDENAR. El error del modelo ya
 # incluye que su orden es imperfecto; si ademas se perturba el score y se
 # vuelve a ordenar, la dispersion se cuenta dos veces. Medido sobre las 479
-# predicciones de 2025 (el intervalo P10-P90 deberia cubrir el 80% de los
-# resultados reales):
+# predicciones de 2025 con el regresor anclado (el intervalo P10-P90 deberia
+# cubrir el 80% de los resultados reales), por regimen:
 #
-#     escala   sigma   cobertura   anchura   aciertos +-3
-#       1.00    3.46      88.1%      13.0        50.3%     <- inflado
-#       0.65    2.25      84.1%      11.9        54.5%
-#       0.50    1.73      80.8%      11.4        56.6%     <- calibrado
-#       0.40    1.39      77.7%      10.9        56.6%     <- demasiado seguro
+#   post_quali (sigma 3.45)        pre_quali (sigma 4.01)
+#     escala  cobertura  +-3         escala  cobertura  +-3
+#       1.00    86.2%   53.4%          1.00    82.7%   44.3%
+#       0.65    82.5%   59.1%          0.80    80.8%   45.3%   <- calibrado
+#       0.50    80.2%   60.3%  <-      0.65    78.3%   46.1%
+#       0.40    77.7%   60.1%          0.50    74.9%   47.4%   <- demasiado seguro
 #
-# Reejecutable con ml/training/calibrate_simulation.py.
-RESIDUAL_SCALE = 0.5
+# Reejecutable con ml/training/calibrate_simulation.py [version] [pre_quali].
+RESIDUAL_SCALE = {REGIME_POST_QUALI: 0.5, REGIME_PRE_QUALI: 0.8}
 
 
 class RaceSimulator:
@@ -74,13 +83,27 @@ class RaceSimulator:
         # y asume que su propia prediccion es exacta -- daba resultados como
         # "si no abandona, gana el 100% de las veces".
         metrics_path = model_dir / "metrics.json"
-        self.residual_std = DEFAULT_RESIDUAL_STD
-        if metrics_path.exists():
-            metrics = json.loads(metrics_path.read_text(encoding="utf-8"))
-            self.residual_std = float(
-                metrics.get("finish_position", {}).get("residual_std_val_2025", DEFAULT_RESIDUAL_STD)
+        metrics = json.loads(metrics_path.read_text(encoding="utf-8")) if metrics_path.exists() else {}
+        self.residual_std = float(
+            metrics.get("finish_position", {}).get("residual_std_val_2025", DEFAULT_RESIDUAL_STD)
+        )
+
+        # Regresor anclado (ml/training/anchor.py): predice deltas frente a
+        # la parrilla (o a la forma reciente si aun no hay clasificacion), con
+        # un regresor y una incertidumbre por regimen. Los modelos anteriores
+        # al 2026-09-12 predicen la posicion absoluta con un solo regresor.
+        self.anchored = metrics.get("regressor", {}).get("target") == "delta_from_anchor"
+        self.reg_pre_quali = None
+        self.residual_std_pre_quali = self.residual_std
+        if self.anchored:
+            self.reg_pre_quali = load_xgb_regressor(model_dir / "finish_position_regressor_pre_quali.json")
+            self.residual_std_pre_quali = float(
+                metrics.get("finish_position_pre_quali", {}).get("residual_std_val_2025", self.residual_std)
             )
-        logger.info(f"Incertidumbre del modelo (desviacion del error): {self.residual_std:.2f} posiciones")
+        logger.info(
+            f"Incertidumbre del modelo (desviacion del error): {self.residual_std:.2f} posiciones"
+            + (f" post_quali / {self.residual_std_pre_quali:.2f} pre_quali" if self.anchored else "")
+        )
 
         logger.info(f"RaceSimulator cargado desde {model_dir} ({len(self.feature_cols)} features)")
 
@@ -111,6 +134,23 @@ class RaceSimulator:
                 df[col] = df[col].astype("category")
         return df
 
+    def _predict_scores(
+        self, race_features: pd.DataFrame, X: pd.DataFrame, n_simulations: int
+    ) -> tuple[np.ndarray, float]:
+        """Posicion esperada por fila de X (parrilla apilada n_simulations veces)
+        y la sigma del ruido residual a inyectar (incertidumbre del regresor
+        que la produjo, ya escalada)."""
+        if not self.anchored:
+            return self.reg.predict(X), self.residual_std * RESIDUAL_SCALE[REGIME_POST_QUALI]
+
+        regime = regime_for(race_features)
+        if regime == REGIME_POST_QUALI:
+            reg, residual_std = self.reg, self.residual_std
+        else:
+            reg, residual_std = self.reg_pre_quali, self.residual_std_pre_quali
+        anchor = np.tile(anchor_for(race_features, regime).to_numpy(dtype=float), n_simulations)
+        return reg.predict(blank_quali_features(X, regime)) + anchor, residual_std * RESIDUAL_SCALE[regime]
+
     def simulate_race(
         self, race_features: pd.DataFrame, n_simulations: int = 2000, seed: int = 42
     ) -> pd.DataFrame:
@@ -123,7 +163,7 @@ class RaceSimulator:
         # de ellas. El modelo debe recibir NaN (no conoce a un debutante), pero
         # el resultado tiene que seguir identificandolo por su nombre.
         driver_codes = race_features["driver_code"].to_numpy()
-        race_features = self._prep_categoricals(race_features)
+        race_features = fill_grid_from_quali(self._prep_categoricals(race_features))
         n_drivers = len(race_features)
         rng = np.random.default_rng(seed)
 
@@ -223,10 +263,10 @@ class RaceSimulator:
         extra_dnf = (rng.random(total) < (0.05 * sc_scale)) & rain_rows
         dnf_flat = dnf_flat | extra_dnf
 
-        scores = self.reg.predict(X)
+        scores, residual_sigma = self._predict_scores(race_features, X, n_simulations)
         # Ruido residual: lo que el modelo NO sabe, calibrado con la
         # dispersion real de su error en validacion.
-        scores = scores + rng.normal(0.0, self.residual_std * RESIDUAL_SCALE, size=total)
+        scores = scores + rng.normal(0.0, residual_sigma, size=total)
 
         scores = scores.reshape(n_simulations, n_drivers)
         dnf_matrix = dnf_flat.reshape(n_simulations, n_drivers)
