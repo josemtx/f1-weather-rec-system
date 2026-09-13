@@ -12,41 +12,39 @@ de semana:
 El modelo se REENTRENA en cada regimen: si en produccion no vas a tener
 clasificacion, tampoco debes entrenar con ella (un modelo que aprendio a
 apoyarse en la pole y luego no la recibe rinde peor que uno que nunca
-conto con ella).
+conto con ella). El regresor es el anclado de train.py: post-quali frente a
+la parrilla, los otros dos frente a la forma reciente, y se reporta el MAE
+del ancla sola para saber cuanto aporta el modelo sobre ella.
 
-Uso: python -m ml.training.ablation
+Uso: python -m ml.training.ablation [ruta_salida.json]
 """
 
 import json
 import logging
+import sys
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from sklearn.metrics import mean_absolute_error, roc_auc_score
+from sklearn.metrics import roc_auc_score
 
 from ml.common.logging_conf import configure
+from ml.training.anchor import QUALI_FEATURES, REGIME_POST_QUALI, REGIME_PRE_QUALI
 from ml.training.train import (
-    CATEGORICAL_COLS,
     FEATURES_PATH,
     TRAIN_YEARS,
     VAL_YEAR,
     _feature_cols,
     _prepare,
+    fit_regressor,
+    predict_position,
+    regressor_metrics,
 )
 
 logger = logging.getLogger(__name__)
 
 OUT_PATH = Path(__file__).resolve().parents[1] / "models" / "ablation_information_regimes.json"
-
-# Features que solo existen una vez disputada la clasificacion del sabado.
-QUALI_FEATURES = [
-    "grid_position", "driver_quali_position", "quali_gap_to_pole_pct",
-    "grid_penalty_positions", "n_quali_laps", "quali_soft_tyre_share",
-    "quali_day_temp_avg", "quali_day_precipitation_mm", "quali_day_rain_flag",
-    "conditions_delta_quali_to_race", "conditions_rain_changed",
-]
 
 CLIMATE_FEATURES = [
     # Clima directo de la carrera (categoria E)
@@ -62,32 +60,32 @@ CLIMATE_FEATURES = [
     "team_avg_finish_in_wet", "team_wet_skill_delta",
 ]
 
+# (regimen del regresor anclado, features ocultas ademas de las del regimen)
 REGIMES = {
-    "post_quali": [],
-    "pre_quali": QUALI_FEATURES,
-    "solo_forma": QUALI_FEATURES + CLIMATE_FEATURES,
+    "post_quali": (REGIME_POST_QUALI, []),
+    "pre_quali": (REGIME_PRE_QUALI, QUALI_FEATURES),
+    "solo_forma": (REGIME_PRE_QUALI, QUALI_FEATURES + CLIMATE_FEATURES),
 }
 
 
-def _evaluate_regime(train: pd.DataFrame, val: pd.DataFrame, feature_cols: list[str], blanked: list[str]) -> dict:
+def _evaluate_regime(train: pd.DataFrame, val: pd.DataFrame, feature_cols: list[str], regime: str, blanked: list[str]) -> dict:
     """Entrena y evalua ocultando (NaN) las features de `blanked`."""
     to_blank = [c for c in blanked if c in feature_cols]
-    train_x, val_x = train[feature_cols].copy(), val[feature_cols].copy()
+    train_b, val_b = train.copy(), val.copy()
     for col in to_blank:
-        train_x[col] = np.nan
-        val_x[col] = np.nan
+        train_b[col] = np.nan
+        val_b[col] = np.nan
 
-    reg = xgb.XGBRegressor(
-        n_estimators=300, max_depth=5, learning_rate=0.05,
-        tree_method="hist", enable_categorical=True, random_state=42,
-    )
-    reg.fit(train_x, train["y_finish_position"])
-    pred = reg.predict(val_x)
+    reg = fit_regressor(train_b, feature_cols, regime)
+    pred = predict_position(reg, val_b, feature_cols, regime)
+    m = regressor_metrics(val_b, pred, regime)
 
     result = {
         "features_ocultas": len(to_blank),
-        "mae": float(mean_absolute_error(val["y_finish_position"], pred)),
-        "residual_std": float(np.std(val["y_finish_position"].to_numpy() - pred)),
+        "mae": m["mae_val_2025"],
+        "mae_ancla": m["mae_ancla_val_2025"],
+        "mae_incluyendo_dnf": m["mae_val_2025_incluyendo_dnf"],
+        "residual_std": m["residual_std_val_2025"],
     }
 
     for target in ["podium", "points", "dnf"]:
@@ -95,9 +93,9 @@ def _evaluate_regime(train: pd.DataFrame, val: pd.DataFrame, feature_cols: list[
             n_estimators=300, max_depth=4, learning_rate=0.05,
             tree_method="hist", enable_categorical=True, random_state=42,
         )
-        clf.fit(train_x, train[f"y_{target}"])
-        proba = clf.predict_proba(val_x)[:, 1]
-        y_true = val[f"y_{target}"]
+        clf.fit(train_b[feature_cols], train_b[f"y_{target}"])
+        proba = clf.predict_proba(val_b[feature_cols])[:, 1]
+        y_true = val_b[f"y_{target}"]
         result[f"auc_{target}"] = float(roc_auc_score(y_true, proba)) if y_true.nunique() > 1 else None
 
     # Aciertos de podio: de los 3 primeros predichos por carrera, cuantos
@@ -115,7 +113,7 @@ def _evaluate_regime(train: pd.DataFrame, val: pd.DataFrame, feature_cols: list[
     return result
 
 
-def main():
+def main(out_path: Path = OUT_PATH):
     raw = pd.read_parquet(FEATURES_PATH)
     df = _prepare(raw[raw["year"] <= VAL_YEAR])
     feature_cols = _feature_cols(df)
@@ -125,24 +123,24 @@ def main():
     logger.info(f"Ablacion sobre {len(val)} filas de {VAL_YEAR} (entrenando con {len(train)})")
 
     results = {}
-    for name, blanked in REGIMES.items():
-        results[name] = _evaluate_regime(train, val, feature_cols, blanked)
+    for name, (regime, blanked) in REGIMES.items():
+        results[name] = _evaluate_regime(train, val, feature_cols, regime, blanked)
         r = results[name]
         logger.info(
-            f"[{name:11s}] MAE={r['mae']:.3f}  podio_AUC={r['auc_podium']:.3f}  "
+            f"[{name:11s}] MAE={r['mae']:.3f} (ancla {r['mae_ancla']:.3f})  podio_AUC={r['auc_podium']:.3f}  "
             f"puntos_AUC={r['auc_points']:.3f}  aciertos_podio={r['aciertos_podio_por_carrera']}/3"
         )
 
     base = results["post_quali"]["mae"]
-    logger.info("=== Coste de no tener clasificacion ===")
+    logger.info("=== Coste de no tener clasificacion (MAE finalizadores) ===")
     for name, r in results.items():
         logger.info(f"  {name:11s}: MAE {r['mae']:.3f}  ({r['mae'] - base:+.3f} vs post-quali)")
 
-    OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    OUT_PATH.write_text(json.dumps(results, indent=2), encoding="utf-8")
-    logger.info(f"Guardado en {OUT_PATH}")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(results, indent=2), encoding="utf-8")
+    logger.info(f"Guardado en {out_path}")
 
 
 if __name__ == "__main__":
     configure()
-    main()
+    main(Path(sys.argv[1]) if len(sys.argv) > 1 else OUT_PATH)

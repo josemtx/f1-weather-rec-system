@@ -16,6 +16,8 @@ from ml.features.anti_leakage import (
     rolling_sum_shifted,
 )
 
+RAN_FULL_DISTANCE_STATUS = r"^(Finished|Lapped|\+\d+ Laps?)$"
+
 
 def _build_h2h_flags(df: pd.DataFrame) -> pd.Series:
     """Para cada fila, True si el piloto termino por delante de su companero
@@ -44,9 +46,21 @@ def build_driver_form(df: pd.DataFrame) -> pd.DataFrame:
     df["_grid_to_finish_delta"] = df["grid_position"] - df["finish_position"].fillna(df["grid_position"] + 10)
     df["_win"] = df["finish_position"].fillna(99) == 1
     df["_h2h_beat_teammate"] = _build_h2h_flags(df)
+    # Ritmo sin fiabilidad: un abandono clasifica P20 y hunde la media de
+    # llegadas aunque el piloto ruede en el podio cuando termina. Se anula
+    # (NaN) y la media movil lo ignora; la fiabilidad ya vive en
+    # driver_dnf_rate_last10. Es el ancla pre-clasificacion del regresor.
+    # "Corrio la distancia" se decide por el estado y no por `finished`:
+    # quien se retira con el 90% recorrido queda clasificado (finished=True,
+    # status "Retired"), y eso tampoco es ritmo.
+    ran_full_distance = df["status"].astype(str).str.match(RAN_FULL_DISTANCE_STATUS)
+    df["_finish_if_ran"] = df["finish_position"].where(ran_full_distance)
 
     out = pd.DataFrame(index=df.index)
     out["driver_avg_finish_last5"] = rolling_mean_shifted(df, "driver_code", "race_date", "finish_position", 5)
+    out["driver_avg_finish_when_finished_last5"] = rolling_mean_shifted(
+        df, "driver_code", "race_date", "_finish_if_ran", 5
+    )
     out["driver_avg_finish_last10"] = rolling_mean_shifted(df, "driver_code", "race_date", "finish_position", 10)
     out["driver_avg_finish_season_to_date"] = expanding_mean_shifted(
         df, "_driver_season_key", "race_date", "finish_position"

@@ -68,6 +68,8 @@ def write_registry(
         datos que ya ha visto: su calidad estimada es la del modelo de
         evaluacion.
     """
+    save_version_metadata(version_dir_name, metrics, feature_list)
+
     registry_path = MODELS_ROOT / "registry.json"
     registry = {}
     if registry_path.exists():
@@ -77,11 +79,16 @@ def write_registry(
     if version_dir_name not in registry["history"]:
         registry["history"].append(version_dir_name)
     registry_path.write_text(json.dumps(registry, indent=2), encoding="utf-8")
+    return registry_path
 
+
+def save_version_metadata(version_dir_name: str, metrics: dict, feature_list: list[str]) -> Path:
+    """Escribe metrics.json y feature_list.json de una version sin tocar los punteros del registry."""
     version_dir = MODELS_ROOT / version_dir_name
+    version_dir.mkdir(parents=True, exist_ok=True)
     (version_dir / "metrics.json").write_text(json.dumps(metrics, indent=2, default=str), encoding="utf-8")
     (version_dir / "feature_list.json").write_text(json.dumps(feature_list, indent=2), encoding="utf-8")
-    return registry_path
+    return version_dir
 
 
 def get_production_dir() -> Path:

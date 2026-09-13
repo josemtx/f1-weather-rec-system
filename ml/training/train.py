@@ -1,5 +1,5 @@
 """Entrenamiento XGBoost, modelo B (2023-2026, ver ml/docs/ARCHITECTURE.md):
-regresor de posicion final + clasificadores podium/points/dnf.
+regresor de posicion final (anclado, por regimen) + clasificadores podium/points/dnf.
 
 Con solo 3 temporadas completas en el rango 2023-2025 (2026 en curso, excluido
 de metricas), un split train/val/test de 3 vias dejaba apenas 440 filas de
@@ -15,9 +15,23 @@ train=2023+2024/test=2025, sin calibrar, solo para verificar que el poder
 predictivo (MAE/AUC) es estable entre folds y no un artefacto de una sola
 particion.
 
-Uso: python -m ml.training.train
+Receta del regresor (decidida el 2026-09-12 con residual_diagnosis.py y
+experiment_anchor.py, sobre ambos folds):
+  - predice la DIFERENCIA respecto a un ancla (ver ml/training/anchor.py),
+    con un regresor por regimen (post_quali / pre_quali);
+  - se entrena SOLO con quienes terminaron: el abandono lo pone el simulador
+    con su propio dado, y meterlo aqui sesgaba +1 puesto a todos los demas;
+  - objetivo de error absoluto, que es la metrica real.
+  Efecto medido (MAE finalizadores, media de folds): post_quali 3.01 -> 2.55
+  (parrilla sola: 2.74); pre_quali 3.47 -> 3.10 (forma sola: 3.13).
+
+Uso: python -m ml.training.train [--tag NOMBRE] [--no-register]
+  --tag          sufijo para el nombre de version (evita pisar una existente)
+  --no-register  guarda artefactos y metricas pero no mueve los punteros
+                 evaluation/production del registry
 """
 
+import argparse
 import json
 import logging
 from datetime import date
@@ -33,10 +47,18 @@ from sklearn.inspection import permutation_importance
 from sklearn.metrics import brier_score_loss, mean_absolute_error, roc_auc_score
 
 from ml.common.logging_conf import configure
+from ml.training.anchor import (
+    N_DRIVERS,
+    REGIME_POST_QUALI,
+    REGIME_PRE_QUALI,
+    anchor_for,
+    blank_quali_features,
+)
 from ml.training.model_registry import (
     MODELS_ROOT,
     apply_calibration,
     save_calibration,
+    save_version_metadata,
     save_xgb_model,
     write_registry,
 )
@@ -62,6 +84,16 @@ CATEGORICAL_COLS = ["circuit_short_name", "circuit_type", "overtaking_difficulty
 # nunca es year seleccionado aqui.
 TRAIN_YEARS = [2023, 2024]
 VAL_YEAR = 2025
+
+REGRESSOR_TARGET = "delta_from_anchor"
+REGRESSOR_FILES = {
+    REGIME_POST_QUALI: "finish_position_regressor",
+    REGIME_PRE_QUALI: "finish_position_regressor_pre_quali",
+}
+REGRESSOR_METRIC_KEYS = {
+    REGIME_POST_QUALI: "finish_position",
+    REGIME_PRE_QUALI: "finish_position_pre_quali",
+}
 
 
 def _prepare(df: pd.DataFrame) -> pd.DataFrame:
@@ -92,44 +124,52 @@ def _temporal_split(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     return train, val
 
 
-def _train_regressor(train, val, feature_cols):
-    model = xgb.XGBRegressor(
-        n_estimators=300, max_depth=5, learning_rate=0.05,
-        tree_method="hist", enable_categorical=True,
-        early_stopping_rounds=20, eval_metric="mae",
-        random_state=42,
+def fit_regressor(train: pd.DataFrame, feature_cols: list[str], regime: str, n_estimators: int = 300) -> xgb.XGBRegressor:
+    finishers = train[train["y_dnf"] == 0]
+    X = blank_quali_features(finishers[feature_cols], regime)
+    y = finishers["y_finish_position"] - anchor_for(finishers, regime)
+    reg = xgb.XGBRegressor(
+        objective="reg:absoluteerror",
+        n_estimators=n_estimators, max_depth=5, learning_rate=0.05,
+        tree_method="hist", enable_categorical=True, random_state=42,
     )
-    model.fit(
-        train[feature_cols], train["y_finish_position"],
-        eval_set=[(val[feature_cols], val["y_finish_position"])],
-        verbose=False,
-    )
-    val_pred = model.predict(val[feature_cols])
-    mae = mean_absolute_error(val["y_finish_position"], val_pred)
+    reg.fit(X, y)
+    return reg
 
-    # Desviacion tipica del error de prediccion: la incertidumbre del PROPIO
-    # MODELO, distinta de la del mundo. Sin ella el Monte Carlo simula un
-    # universo donde el modelo acierta siempre y da probabilidades absurdas.
-    #
-    # Se mide SOLO sobre quienes terminaron: el error de un piloto que
-    # abandona desde 3o y queda clasificado 18o es enorme, pero esa varianza
-    # ya la modela el simulador tirando el dado del DNF aparte. Incluirla
-    # aqui seria contarla dos veces y ensanchar de mas la distribucion.
-    residuals_all = val["y_finish_position"].to_numpy() - val_pred
-    finished_mask = val["y_dnf"].to_numpy() == 0
-    residual_std_finishers = float(np.std(residuals_all[finished_mask]))
 
-    logger.info(
-        f"[finish_position] MAE en val (2025): {mae:.3f} posiciones | "
-        f"desviacion del error: {residual_std_finishers:.3f} (solo finalizadores) "
-        f"vs {float(np.std(residuals_all)):.3f} (todas, infla por DNF)"
-    )
-    return model, {
-        "mae_val_2025": mae,
-        "residual_std_val_2025": residual_std_finishers,
-        "residual_std_incluyendo_dnf": float(np.std(residuals_all)),
-        "best_iteration": int(model.best_iteration),
+def predict_position(reg: xgb.XGBRegressor, df: pd.DataFrame, feature_cols: list[str], regime: str) -> np.ndarray:
+    X = blank_quali_features(df[feature_cols], regime)
+    return np.clip(reg.predict(X) + anchor_for(df, regime).to_numpy(), 1, N_DRIVERS)
+
+
+def regressor_metrics(val: pd.DataFrame, pred: np.ndarray, regime: str) -> dict:
+    """MAE sobre finalizadores (lo que consume el simulador) y frente al ancla.
+
+    La desviacion del error se mide SOLO sobre quienes terminaron: el error
+    de un piloto que abandona desde 3o y queda clasificado 18o es enorme,
+    pero esa varianza ya la modela el simulador tirando el dado del DNF
+    aparte. Incluirla aqui seria contarla dos veces.
+    """
+    y = val["y_finish_position"].to_numpy()
+    fin = val["y_dnf"].to_numpy() == 0
+    anchor = anchor_for(val, regime).to_numpy()
+    return {
+        "mae_val_2025": float(mean_absolute_error(y[fin], pred[fin])),
+        "mae_ancla_val_2025": float(mean_absolute_error(y[fin], anchor[fin])),
+        "mae_val_2025_incluyendo_dnf": float(mean_absolute_error(y, pred)),
+        "residual_std_val_2025": float(np.std(y[fin] - pred[fin])),
     }
+
+
+def _train_regressor(train, val, feature_cols, regime):
+    model = fit_regressor(train, feature_cols, regime)
+    metrics = regressor_metrics(val, predict_position(model, val, feature_cols, regime), regime)
+    logger.info(
+        f"[{regime}] MAE finalizadores val (2025): {metrics['mae_val_2025']:.3f} "
+        f"(ancla sola: {metrics['mae_ancla_val_2025']:.3f}) | "
+        f"desviacion del error: {metrics['residual_std_val_2025']:.3f}"
+    )
+    return model, metrics
 
 
 def _train_calibrated_classifier(target_name: str, train, val, feature_cols):
@@ -188,14 +228,14 @@ def _walk_forward_backtest(df: pd.DataFrame, feature_cols: list[str]) -> dict:
         if train_fold.empty or test_fold.empty:
             continue
 
-        reg = xgb.XGBRegressor(
-            n_estimators=200, max_depth=5, learning_rate=0.05,
-            tree_method="hist", enable_categorical=True, random_state=42,
-        )
-        reg.fit(train_fold[feature_cols], train_fold["y_finish_position"])
-        mae = mean_absolute_error(test_fold["y_finish_position"], reg.predict(test_fold[feature_cols]))
+        fold_metrics = {}
+        for regime in (REGIME_POST_QUALI, REGIME_PRE_QUALI):
+            reg = fit_regressor(train_fold, feature_cols, regime, n_estimators=200)
+            m = regressor_metrics(test_fold, predict_position(reg, test_fold, feature_cols, regime), regime)
+            fold_metrics[f"mae_{regime}"] = m["mae_val_2025"]
+            fold_metrics[f"mae_ancla_{regime}"] = m["mae_ancla_val_2025"]
+        fold_metrics["mae_finish_position"] = fold_metrics[f"mae_{REGIME_POST_QUALI}"]
 
-        fold_metrics = {"mae_finish_position": float(mae)}
         for target in ["podium", "points", "dnf"]:
             y_train = train_fold[f"y_{target}"]
             y_test = test_fold[f"y_{target}"]
@@ -207,9 +247,14 @@ def _walk_forward_backtest(df: pd.DataFrame, feature_cols: list[str]) -> dict:
             proba = clf.predict_proba(test_fold[feature_cols])[:, 1]
             fold_metrics[f"auc_{target}"] = float(roc_auc_score(y_test, proba)) if y_test.nunique() > 1 else None
 
-        logger.info(f"[walk-forward {label}] MAE={mae:.3f} " + " ".join(
-            f"AUC_{k.split('_')[1]}={v:.3f}" for k, v in fold_metrics.items() if k.startswith("auc_") and v is not None
-        ))
+        logger.info(
+            f"[walk-forward {label}] MAE post={fold_metrics['mae_post_quali']:.3f} "
+            f"(ancla {fold_metrics['mae_ancla_post_quali']:.3f}) "
+            f"pre={fold_metrics['mae_pre_quali']:.3f} (ancla {fold_metrics['mae_ancla_pre_quali']:.3f}) "
+            + " ".join(
+                f"AUC_{k.split('_')[1]}={v:.3f}" for k, v in fold_metrics.items() if k.startswith("auc_") and v is not None
+            )
+        )
         results[label] = fold_metrics
 
     return results
@@ -234,7 +279,7 @@ def _permutation_importance_check(model, X_val, y_val, top_n: int = 15) -> dict:
     return {name: float(val) for name, val in ranked}
 
 
-def _train_production_model(df: pd.DataFrame, feature_cols: list[str], eval_metrics: dict, eval_categories: dict):
+def _train_production_model(df: pd.DataFrame, feature_cols: list[str], eval_metrics: dict, version_name: str, register: bool):
     """Misma receta, entrenada con TODO lo disponible (2023-2025).
 
     El modelo de evaluacion deja 2025 fuera para que sus metricas sean
@@ -251,16 +296,11 @@ def _train_production_model(df: pd.DataFrame, feature_cols: list[str], eval_metr
     train_all = df[df["year"].isin(years)]
     logger.info(f"=== Modelo de produccion: entrenando con {len(train_all)} filas ({years}) ===")
 
-    version_name = f"{date.today().isoformat()}_production"
     version_dir = MODELS_ROOT / version_name
     version_dir.mkdir(parents=True, exist_ok=True)
 
-    reg = xgb.XGBRegressor(
-        n_estimators=300, max_depth=5, learning_rate=0.05,
-        tree_method="hist", enable_categorical=True, random_state=42,
-    )
-    reg.fit(train_all[feature_cols], train_all["y_finish_position"])
-    save_xgb_model(reg, version_dir, "finish_position_regressor")
+    for regime, file_name in REGRESSOR_FILES.items():
+        save_xgb_model(fit_regressor(train_all, feature_cols, regime), version_dir, file_name)
 
     for target in ["podium", "points", "dnf"]:
         clf = xgb.XGBClassifier(
@@ -280,36 +320,41 @@ def _train_production_model(df: pd.DataFrame, feature_cols: list[str], eval_metr
     categories = {col: sorted(train_all[col].dropna().unique().tolist()) for col in CATEGORICAL_COLS}
     (version_dir / "categories.json").write_text(json.dumps(categories, indent=2), encoding="utf-8")
 
+    post_key, pre_key = REGRESSOR_METRIC_KEYS[REGIME_POST_QUALI], REGRESSOR_METRIC_KEYS[REGIME_PRE_QUALI]
     prod_metrics = {
         "version": version_name,
         "rol": "production",
         "entrenado_con": years,
         "n_filas_entrenamiento": len(train_all),
         "calibracion_heredada_de": eval_metrics.get("version"),
+        "regressor": {"target": REGRESSOR_TARGET},
         "nota": (
             "Este modelo no tiene metricas propias por diseno: ha visto todos los datos "
             "disponibles. Su calidad estimada es la del modelo de evaluacion, que uso la "
             "misma receta dejando 2025 fuera."
         ),
         "metricas_estimadas_del_modelo_de_evaluacion": {
-            "mae": eval_metrics.get("finish_position", {}).get("mae_val_2025"),
-            "residual_std": eval_metrics.get("finish_position", {}).get("residual_std_val_2025"),
+            "mae": eval_metrics.get(post_key, {}).get("mae_val_2025"),
+            "mae_ancla": eval_metrics.get(post_key, {}).get("mae_ancla_val_2025"),
+            "mae_pre_quali": eval_metrics.get(pre_key, {}).get("mae_val_2025"),
+            "residual_std": eval_metrics.get(post_key, {}).get("residual_std_val_2025"),
             "auc_podium": eval_metrics.get("podium", {}).get("auc_val"),
             "auc_points": eval_metrics.get("points", {}).get("auc_val"),
             "auc_dnf": eval_metrics.get("dnf", {}).get("auc_val"),
         },
-        # El simulador lee residual_std de aqui: debe ser el del modelo de
-        # evaluacion, ya que es la unica medida honesta del error.
-        "finish_position": {
-            "residual_std_val_2025": eval_metrics.get("finish_position", {}).get("residual_std_val_2025"),
-            "mae_val_2025": eval_metrics.get("finish_position", {}).get("mae_val_2025"),
-        },
+        # El simulador lee residual_std de aqui, por regimen: debe ser el del
+        # modelo de evaluacion, ya que es la unica medida honesta del error.
+        post_key: {k: eval_metrics.get(post_key, {}).get(k) for k in ("residual_std_val_2025", "mae_val_2025", "mae_ancla_val_2025")},
+        pre_key: {k: eval_metrics.get(pre_key, {}).get(k) for k in ("residual_std_val_2025", "mae_val_2025", "mae_ancla_val_2025")},
     }
-    write_registry(version_name, prod_metrics, feature_cols, role="production")
+    if register:
+        write_registry(version_name, prod_metrics, feature_cols, role="production")
+    else:
+        save_version_metadata(version_name, prod_metrics, feature_cols)
     logger.info(f"Modelo de produccion guardado en {version_dir}")
 
 
-def main():
+def main(tag: str | None = None, register: bool = True):
     logger.info(f"Cargando {FEATURES_PATH}")
     raw = pd.read_parquet(FEATURES_PATH)
     df = _prepare(raw[raw["year"] <= 2025])  # 2026 excluido de metricas (temporada en curso)
@@ -318,21 +363,25 @@ def main():
 
     train, val = _temporal_split(df)
 
-    version_name = f"{date.today().isoformat()}_modelB"
+    suffix = f"_{tag}" if tag else ""
+    version_name = f"{date.today().isoformat()}{suffix}_modelB"
     version_dir = MODELS_ROOT / version_name
 
-    all_metrics = {"version": version_name, "n_features": len(feature_cols)}
+    all_metrics = {"version": version_name, "n_features": len(feature_cols), "regressor": {"target": REGRESSOR_TARGET}}
 
-    reg_model, reg_metrics = _train_regressor(train, val, feature_cols)
-    save_xgb_model(reg_model, version_dir, "finish_position_regressor")
-    all_metrics["finish_position"] = reg_metrics
-
-    logger.info("SHAP (finish_position) sobre val 2025...")
-    all_metrics["finish_position"]["shap_top15"] = _shap_summary(reg_model, val[feature_cols])
-    logger.info("Permutation importance (finish_position) sobre val 2025, segunda opinion...")
-    all_metrics["finish_position"]["permutation_importance_top15"] = _permutation_importance_check(
-        reg_model, val[feature_cols], val["y_finish_position"]
-    )
+    for regime, file_name in REGRESSOR_FILES.items():
+        reg_model, reg_metrics = _train_regressor(train, val, feature_cols, regime)
+        save_xgb_model(reg_model, version_dir, file_name)
+        all_metrics[REGRESSOR_METRIC_KEYS[regime]] = reg_metrics
+        if regime == REGIME_POST_QUALI:
+            val_fin = val[val["y_dnf"] == 0]
+            y_delta = val_fin["y_finish_position"] - anchor_for(val_fin, regime)
+            logger.info("SHAP (finish_position, post_quali) sobre finalizadores de val 2025...")
+            reg_metrics["shap_top15"] = _shap_summary(reg_model, val_fin[feature_cols])
+            logger.info("Permutation importance, segunda opinion...")
+            reg_metrics["permutation_importance_top15"] = _permutation_importance_check(
+                reg_model, val_fin[feature_cols], y_delta
+            )
 
     for target in ["podium", "points", "dnf"]:
         model, a, b, metrics = _train_calibrated_classifier(target, train, val, feature_cols)
@@ -353,17 +402,25 @@ def main():
     logger.info("=== Backtest walk-forward (verificacion de estabilidad, sin calibrar) ===")
     all_metrics["walk_forward_backtest"] = _walk_forward_backtest(df, feature_cols)
 
-    _train_production_model(df, feature_cols, all_metrics, categories)
+    _train_production_model(df, feature_cols, all_metrics, f"{date.today().isoformat()}{suffix}_production", register)
 
-    write_registry(version_name, all_metrics, feature_cols, role="evaluation")
-    logger.info(f"Artefactos guardados en {version_dir}, registry.json -> evaluation={version_name}")
+    if register:
+        write_registry(version_name, all_metrics, feature_cols, role="evaluation")
+        logger.info(f"Artefactos guardados en {version_dir}, registry.json -> evaluation={version_name}")
+    else:
+        save_version_metadata(version_name, all_metrics, feature_cols)
+        logger.info(f"Artefactos guardados en {version_dir}; registry.json NO tocado (--no-register)")
 
-    logger.info("=== Verificacion cualitativa: Verstappen 2023 (train) deberia dominar SHAP en forma reciente ===")
-    top_shap = list(all_metrics["finish_position"]["shap_top15"].items())[:5]
+    logger.info("=== Verificacion cualitativa: top SHAP del regresor post_quali (deltas frente a parrilla) ===")
+    top_shap = list(all_metrics[REGRESSOR_METRIC_KEYS[REGIME_POST_QUALI]]["shap_top15"].items())[:5]
     for name, val_ in top_shap:
         logger.info(f"  {name}: {val_:.4f}")
 
 
 if __name__ == "__main__":
     configure()
-    main()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--tag", default=None)
+    parser.add_argument("--no-register", action="store_true")
+    args = parser.parse_args()
+    main(tag=args.tag, register=not args.no_register)
