@@ -1,6 +1,6 @@
 # HANDOFF — estado del proyecto y cómo retomarlo
 
-Última actualización: **2026-09-13, ~22:45 UTC** (domingo, tras el GP de Madrid).
+Última actualización: **2026-09-13, ~23:00 UTC** (domingo, tras el GP de Madrid).
 Escrito para que la siguiente sesión arranque sin releer todo el historial.
 
 ---
@@ -34,10 +34,9 @@ en cada comando Java; Python lo lee de `.env`.
 
 ## 3. Estado de git
 
-**Trabajo del 12-13/09 SIN commitear** (ver §4b): `ml/training/{anchor,residual_diagnosis,experiment_anchor}.py`
-y `ml/tests/test_anchor.py` nuevos; `train.py`, `ablation.py`, `calibrate_simulation.py`, `model_registry.py`,
-`monte_carlo.py`, `driver_form.py` y ambos docs modificados. Tests 24/24 en verde. Todo lo anterior está en 14 commits en
-`main`, sin subir a remoto. Los últimos cuatro (2026-09-12 tarde):
+**Todo commiteado** (21 commits en `main`, sin subir a remoto). Los del 13/09 por capas: regresor anclado,
+simulador (régimen + relleno de parrilla), herramientas de diagnóstico, datos del dashboard, docs, y
+"modelo vs parrilla" en Honestidad. Tests 24/24. Los últimos del 12/09:
 
 ```
 358ddda Add session handoff document
@@ -156,7 +155,7 @@ la parrilla") en Honestidad — `metrics.json` ya trae `mae_ancla_val_2025` y el
 ## 5. Dashboard estático — estado y dirección
 
 **Fichero**: `ml/dashboard/web/index.html` (autocontenido) + `data.json` (305 KB, generado por `export_data.py`).
-**Publicado como artefacto** (v6): https://claude.ai/code/artifact/fc54c822-cfad-4491-947e-3e44d2243699
+**Publicado como artefacto** (v9, 13/09): https://claude.ai/code/artifact/fc54c822-cfad-4491-947e-3e44d2243699
 **Objetivo final**: GitHub Pages, escaparate para visitantes del repo.
 
 **Dirección estética (decidida, no reabrir)**: pantalla de cronometraje FIA, no gráficos de TV.
@@ -170,8 +169,10 @@ sobre superficie oscura: rojo `#e10600` / verde `#1fa85c` / morado `#b44cff`.
 "dónde acaba si termina") · Sandbox (temp × lluvia, 25 escenarios precalculados) · Honestidad
 (backtest 2025, calibración de intervalos, ablación, track record) · **Nerd Data** (71 features/piloto, 9 grupos).
 
-**Pendiente de feedback del usuario** sobre la v6 (acaba de publicarse). Últimas críticas atendidas:
-"P1–P18 es demasiado vago" → rango condicionado a terminar (P1–P5 + DNF aparte); "la interfaz está fea" → rediseño completo.
+**Honestidad muestra ya "modelo vs parrilla"** (v9): bloque "¿Y si no hubiera modelo?" con barras modelo/parrilla
+y modelo/ritmo reciente sobre los mismos finalizadores de 2025, columna "ancla sola" en la ablación, cobertura y
+coste del clima leídos de los datos (nada fijo en el HTML). Feedback general de la v6 aún pendiente del usuario.
+Últimas críticas atendidas: "P1–P18 es demasiado vago" → rango condicionado a terminar; "la interfaz está fea" → rediseño.
 
 **Idea aparcada**: palanca de parrilla en el sandbox ("¿y si VER sale 10º?") — es lo que de verdad
 mueve las probabilidades (el clima apenas: 0.06 puestos). Natural tras la clasificación.
@@ -198,11 +199,9 @@ mueve las probabilidades (el clima apenas: 0.06 puestos). Natural tras la clasif
 
 ## 7. Siguientes pasos, en orden
 
-1. **Commitear** lo de §3 (regresor anclado + relleno de parrilla, ya activos).
-2. Cuando Jolpica vuelva: ingesta 2026 → `export_data` → republicar (§4b).
-3. Recoger feedback del usuario sobre el dashboard v6 y ajustar (incluye mostrar "modelo vs ancla").
-4. Fase C (del plan original): automatización tras carrera, README del repo, Makefile, GitHub Pages.
-5. Opcionales con valor: palanca de parrilla en sandbox (ahora natural: el modelo ya predice deltas frente a ella);
+1. Recoger feedback general del usuario sobre el dashboard (v9) y ajustar.
+2. Fase C (del plan original): automatización tras carrera, README del repo, Makefile, GitHub Pages.
+3. Opcionales con valor: palanca de parrilla en sandbox (ahora natural: el modelo ya predice deltas frente a ella);
    ingesta de libres (FP2 long runs — la única fuente de información nueva pre-quali). Descartado con datos:
    red neuronal (no es un problema de capacidad); `race_control` para DNF (los abandonos de 2025 son DSQ y
    averías desde delante, impredecibles a nivel individual; el dado del simulador ya los trata).
