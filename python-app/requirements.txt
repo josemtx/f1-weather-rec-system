@@ -1,4 +1,0 @@
-Flask
-pymongo
-PyQt5
-requests

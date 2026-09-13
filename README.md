@@ -1,109 +1,90 @@
-# F1-Weather-Rec-System  
+# F1-Weather-Rec
 
-🚦 **F1-Weather-Rec-System** is a project that combines **Java, Python, Flask, PyQt, and MongoDB** to analyze Formula 1 race data together with weather information.  
-The system integrates **external APIs** to collect raw data, processes it, and allows running advanced queries through an API and a desktop GUI.  
+Predicción probabilística de resultados de Fórmula 1, con un dashboard estático
+que dice honestamente qué acierta y qué no.
 
+Ingesta (Java + Python → MongoDB) · 81 features sin fuga temporal · XGBoost
+anclado a la parrilla · simulación Monte Carlo con intervalos calibrados ·
+registro auditable de cada predicción antes de la carrera.
 
-## 📌 Tech Stack
-- **Java + Maven** → Data ingestion and preprocessing from external APIs.  
-- **Python (Flask + PyQt)** → REST API backend and desktop client.  
-- **MongoDB** → NoSQL database to store sessions, drivers, positions, stints, and weather data.  
-- **PyMongo** → Python driver for MongoDB.  
-- **PyQt5** → GUI for executing queries.  
-- **Requests** → API consumption from the client.  
+## Qué predice y cómo de bien
 
+Para cada carrera: probabilidad de victoria, podio y puntos por piloto, dónde
+acaba *si termina* (intervalo P10–P90) y probabilidad de abandono. Todo medido
+sobre la temporada 2025 completa con un modelo que nunca la vio:
 
-## 🌐 External APIs
-The system integrates real-world data using:  
-- **Formula 1 Data API** → race results, drivers, sessions, and stints.  
-- **OpenWeather API** → weather conditions (rain, humidity, track/air temperature, wind speed).    
+| | Error medio (puestos) | Ancla sola |
+|---|---|---|
+| Con clasificación (ancla: parrilla) | **2.49** | 2.88 |
+| Sin clasificación (ancla: ritmo reciente) | 3.11 | 3.07 |
 
+La lectura honesta: conocida la parrilla, el modelo la mejora en ~0.4 puestos;
+antes de la clasificación no sabe más que el ritmo reciente del piloto. La
+mayor parte del acierto viene de la información, no del aprendizaje
+automático — y el dashboard lo muestra así. Los intervalos del 80 % cubren el
+80.4 % de los resultados reales (calibrado, no supuesto).
 
-## 📂 Repository structure
-```bash
-f1-weather-rec-system/
-├── java-app/
-│   ├── src/main/java/trabajo/   # Java classes for API integration and preprocessing
-│   └── pom.xml                  # Maven configuration
-│
-├── python-app/
-│   ├── server.py                # Flask API with MongoDB queries
-│   ├── client.py                # PyQt desktop client
-│   └── requirements.txt         # Python dependencies
-│
-├── README.md
+## Cómo está hecho
+
+```
+java-app/            Ingesta OpenF1 (sesiones, vueltas, stints, boxes, sensores de pista)
+                     y pronósticos OpenWeatherMap (Task Scheduler diario)
+ml/jolpica/          Resultados, clasificación y calendario 2018-2026 (Jolpica/Ergast)
+ml/ingestion/        Clima histórico: NASA POWER + Copernicus ERA5; catálogo de circuitos
+ml/features/         92 columnas en 10 categorías, anti-fuga estructural (shift(1)),
+                     filas "fantasma" para carreras futuras
+ml/training/         train (evaluation + production), ablación por régimen de información,
+                     calibración de intervalos, diagnóstico de residuos, ancla del regresor
+ml/simulation/       Monte Carlo: clima, fiabilidad, boxes y ruido residual calibrado
+ml/predictions/      Registro de predicciones en Mongo con el régimen de información
+ml/dashboard/        Exportador a data.json + página estática (index.html)
+ml/docs/             ARCHITECTURE.md (decisiones) · HANDOFF.md (estado y cómo retomar)
 ```
 
+Base de datos: MongoDB `F1-WeatherRec-Prod` (fijada en `.env` como `MONGODB_DB`;
+no hay valor por defecto a propósito).
 
-## ⚙️ Setup and Usage
-🔹 Prerequisites
-- **Java 17+** and **Maven 3+**
-- **Python 3.10+**
-- **MongoDB** running locally (mongodb://localhost:27017/)
-- API keys for:
-  - **Formula 1 Data API**
-  - **OpenWeather API**
-    
-👉 Store your API keys as **environment variables** before running the apps:
+## Puesta en marcha
+
+Requisitos: Python 3.11+, Java 17 + Maven, MongoDB local.
+
 ```bash
-export F1_API_KEY=your_api_key_here
-export WEATHER_API_KEY=your_api_key_here
+python -m venv venv && ./venv/Scripts/pip install -r ml/requirements.txt
+cp .env.example .env     # MONGODB_URI, MONGODB_DB, OPENWEATHER_API_KEY, CDS_URL/CDS_KEY
+
+# Datos
+cd java-app && mvn clean package && java -jar target/F1-WeatherRec.jar f1 && cd ..
+python -m ml.ingestion.load_circuits
+python -m ml.jolpica.ingest_jolpica
+python -m ml.ingestion.ingest_climate          # NASA POWER
+python -m ml.ingestion.ingest_era5             # opcional, requiere cuenta CDS
+
+# Modelo
+python -m ml.features.build_features
+python -m ml.training.train
+python -m ml.training.ablation
+python -m ml.training.calibrate_simulation     # y `... <version> pre_quali`
+
+# Cada fin de semana
+python -m ml.predictions.predict_race          # viernes y tras la clasificación
+python -m ml.dashboard.export_data             # regenera ml/dashboard/web/data.json
+python -m pytest ml/tests -q
 ```
 
-#### 🔹 Java Backend
-1. Navigate to the Java app:
-```bash
-cd f1-weather-rec-system/java-app
-```
-2. Build with Maven:
-```bash
-mvn clean package
-```
-3. Run:
-```bash
-java -jar target/F1-WeatherRec.jar
-```
-This will fetch and preprocess data from external APIs, storing it into **MongoDB**.
+El dashboard es HTML autocontenido: `ml/dashboard/web/` se sirve tal cual
+(GitHub Pages o `python -m http.server` en esa carpeta).
 
-#### 🔹 Flask API (Python)
-1. Navigate to the Python app:
-```bash
-cd f1-weather-rec-system/python-app
-```
-2. Install dependencies:
-```bash
-pip install -r requirements.txt
-```
-3. Start the Flask server:
-```bash
-python server.py
-```
-The API will be available at `http://127.0.0.1:5000`.
+## Decisiones que conviene conocer
 
-#### 🔹 PyQt Client (Python)
-1. With the API running, start the client:
-```bash
-python client.py
-```
-2. A GUI will open with a **query selector**:
-   - **Query 1**: Top 3 drivers per circuit.
-   - **Query 2**: Race winners in rainy sessions and tire usage.
-   - **Query 3**: Winner details with average weather conditions.
-  
+- **El regresor predice el delta frente a un ancla**, no la posición absoluta.
+  Medido: el modelo absoluto no superaba a "predecir = parrilla". Ver
+  `ml/training/anchor.py`.
+- **Los abandonos no entran en el regresor**: los pone el simulador con su
+  propio dado. Mezclarlos sesgaba +1 puesto a todos los demás y destrozaba los
+  intervalos.
+- **El clima aporta ~0.02 puestos.** Con ~5 % de carreras mojadas es un techo
+  de datos, no de diseño; está documentado en el dashboard, no escondido.
+- **Todo lo que se mide se mide fuera de muestra**, y las predicciones se
+  registran antes de la carrera y no se pueden reescribir después.
 
-## 📊 Key Features
-✅ Collect and preprocess **Formula 1 race data** and **weather data** from external APIs.
-✅ Store enriched information in **MongoDB**.
-✅ Expose insights through a **Flask REST API**.
-✅ Execute queries via a **PyQt5 desktop GUI**.
-✅ Data preprocessing and services implemented in **Java**.
-
-
-## 🚀 Project Value
-This project demonstrates strong skills in:
-- **Multi-language integration (Java + Python)**.
-- **External API integration (F1 API + OpenWeather)**.
-- **REST API design and consumption**.
-- **NoSQL databases (MongoDB)** in analytics contexts.
-- **Desktop GUI development with PyQt**.
-It represents a real-world Data-Driven Application, showcasing how to combine sports performance with external weather data to extract insights.
+Más detalle en [ml/docs/ARCHITECTURE.md](ml/docs/ARCHITECTURE.md).
