@@ -23,7 +23,7 @@ public class MongoDBClient implements AutoCloseable {
     public MongoDBClient() {
         String host = System.getenv().getOrDefault("MONGO_HOST", "localhost");
         int port = Integer.parseInt(System.getenv().getOrDefault("MONGO_PORT", "27017"));
-        String dbName = System.getenv().getOrDefault("MONGO_DB", "F1-WeatherRec");
+        String dbName = System.getenv().getOrDefault("MONGO_DB", "F1-WeatherRec-Prod");
 
         this.client = MongoClients.create("mongodb://" + host + ":" + port);
         this.database = client.getDatabase(dbName);
