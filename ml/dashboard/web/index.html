@@ -414,7 +414,8 @@
     <div class="panel carbon pad">
       <div class="note">
         <b>Esto mueve menos de lo que esperarías, y es un resultado, no un fallo.</b>
-        Medimos aparte cuánto aporta el clima al modelo: quitarlo entero empeora el error solo 0,06 puestos.
+        Medimos aparte cuánto aporta el clima al modelo: quitarlo entero empeora el error solo
+        <span id="climate-cost">—</span> puestos.
         Casi todas las carreras son secas, así que hay poco de lo que aprender. El deslizador es fiel al modelo,
         y el modelo dice que el tiempo pesa mucho menos que la forma del piloto.
         <br><br>Las 25 combinaciones están <b>precalculadas</b>, no simuladas en vivo: la página es estática
@@ -434,11 +435,22 @@
     </div>
 
     <div class="panel carbon pad">
+      <h2>¿Y si no hubiera modelo?</h2>
+      <p class="tiny muted" style="margin:8px 0 16px; max-width:70ch">
+        La pregunta incómoda. Una vez corrida la clasificación, la parrilla ya es una predicción
+        gratis y muy buena. Sobre <b style="color:var(--ink)">los mismos pilotos y las mismas carreras</b>
+        de 2025, contando solo a quienes terminaron:
+      </p>
+      <div id="vs-grid"></div>
+      <p class="tiny muted" style="margin:14px 0 0; max-width:70ch" id="vs-grid-note"></p>
+    </div>
+
+    <div class="panel carbon pad">
       <h2>¿Dicen la verdad los intervalos?</h2>
       <p class="tiny muted" style="margin:8px 0 16px; max-width:70ch">
         Un intervalo del 80 % debe contener el 80 % de los resultados reales. Ni más ni menos:
         cubrir el 95 % significaría que el simulador es tan prudente que no informa de nada.
-        Al calibrarlo bajó de 88,1 % a 80,8 %, y los aciertos dentro de ±3 puestos subieron del 50 % al 57 %.
+        <span id="coverage-note"></span>
       </p>
       <div id="coverage"></div>
     </div>
@@ -451,9 +463,13 @@
 
     <div class="panel carbon pad">
       <h2>Lo que cuesta predecir antes de la clasificación</h2>
-      <p class="tiny muted" style="margin:8px 0 16px">El mismo modelo, entrenado tres veces ocultándole bloques distintos de información.</p>
+      <p class="tiny muted" style="margin:8px 0 16px; max-width:70ch">
+        El mismo modelo, entrenado tres veces ocultándole bloques distintos de información. El modelo predice
+        cuántos puestos gana o pierde cada piloto respecto a un <b style="color:var(--ink)">ancla</b>: la parrilla
+        si ya hay clasificación, su ritmo reciente si no. "Ancla sola" es lo que acertarías usando solo eso.
+      </p>
       <div class="tbl-wrap"><table><thead><tr>
-        <th>Momento del fin de semana</th><th class="n">Error medio</th><th class="n">Aciertos de podio</th>
+        <th>Momento del fin de semana</th><th class="n">Error del modelo</th><th class="n">Ancla sola</th><th class="n">Aciertos de podio</th>
       </tr></thead><tbody id="ablation"></tbody></table></div>
     </div>
 
@@ -648,6 +664,35 @@
     host.innerHTML = s;
   }
 
+  function vsGridBars(host, maeModel, maeGrid, maePre, maeAnchorPre) {
+    // Dos pares de barras: con clasificacion (modelo vs parrilla) y sin
+    // (modelo vs ritmo reciente). Menos es mejor; la escala es comun para
+    // que la diferencia se lea a ojo. Cada barra lleva su cifra al lado:
+    // el color de escuderia/kerb es identidad, nunca la unica codificacion.
+    const rows = [
+      ["Con clasificación", "Modelo", maeModel, true], ["", "Parrilla tal cual", maeGrid, false],
+    ];
+    if (maePre != null && maeAnchorPre != null) {
+      rows.push(["Sin clasificación", "Modelo", maePre, true], ["", "Ritmo reciente tal cual", maeAnchorPre, false]);
+    }
+    const W = 600, L = 150, R = 70, BH = 18, GAP = 8, GROUP = 18, top = 14;
+    const max = Math.max(...rows.map((r) => r[2])) * 1.15;
+    const x = (v) => L + (v / max) * (W - L - R);
+    let y = top, s = "";
+    rows.forEach((r, i) => {
+      if (i > 0 && r[0]) y += GROUP;
+      const fill = r[3] ? "var(--kerb)" : "var(--ink-3)";
+      if (r[0]) s += '<text x="0" y="'+(y+BH-4)+'" fill="var(--ink-2)" font-size="10.5" font-family="monospace" letter-spacing="1.2">'+r[0].toUpperCase()+"</text>";
+      s += '<rect x="'+L+'" y="'+y+'" width="'+(x(r[2])-L).toFixed(1)+'" height="'+BH+'" rx="2" fill="'+fill+'" fill-opacity="'+(r[3]?".9":".55")+'"/>';
+      s += '<text x="'+(x(r[2])+8).toFixed(1)+'" y="'+(y+BH-4)+'" fill="var(--ink)" font-size="13" font-weight="700" font-family="monospace">'+r[2].toFixed(2)+"</text>";
+      s += '<text x="'+(L-8)+'" y="'+(y+BH-4)+'" fill="'+(r[3]?"var(--ink)":"var(--ink-2)")+'" font-size="11" text-anchor="end" font-family="monospace">'+r[1]+"</text>";
+      y += BH + GAP;
+    });
+    const H = y + 16;
+    s += '<text x="'+W+'" y="'+(H-2)+'" fill="var(--ink-3)" font-size="10" text-anchor="end" font-family="monospace" letter-spacing="1.2">PUESTOS DE ERROR · MENOS ES MEJOR</text>';
+    host.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" aria-label="Error medio del modelo frente a usar solo la parrilla o el ritmo reciente" style="max-width:100%;display:block">'+s+"</svg>";
+  }
+
   function coverageBar(host, actual, target) {
     const W = 600, H = 100, P = 34;
     const x = (v) => P + v * (W - P*2);
@@ -718,7 +763,11 @@
     }
     tEl.addEventListener("input", paintLab); rEl.addEventListener("input", paintLab); paintLab();
 
-    const pts = []; let hits = 0, races = 0;
+    // Las notas se calculan SOLO sobre quienes terminaron: el error de un
+    // abandono (P3 previsto, clasificado P19) no mide el modelo de ritmo sino
+    // la fiabilidad, que se evalua aparte con el dado del DNF. El scatter si
+    // muestra a todos, para que los abandonos se vean donde estan.
+    const pts = [], fin = []; let hits = 0, races = 0;
     (data.backtest.races || []).forEach((r) => {
       const ok = r.drivers.filter((d) => d.actual != null);
       if (!ok.length) return;
@@ -726,24 +775,49 @@
       const pt = [...ok].sort((a,b)=>a.predicted_mean-b.predicted_mean).slice(0,3).map((d)=>d.code);
       const rt = [...ok].sort((a,b)=>a.actual-b.actual).slice(0,3).map((d)=>d.code);
       hits += pt.filter((c)=>rt.includes(c)).length;
-      ok.forEach((d) => pts.push({ x: d.predicted_mean, y: d.actual }));
+      ok.forEach((d) => {
+        pts.push({ x: d.predicted_mean, y: d.actual });
+        if (d.finished !== false) fin.push({ pred: d.predicted_mean, grid: (d.grid > 0 ? d.grid : GRID_MAX), y: d.actual });
+      });
     });
-    const mae = pts.reduce((s,p)=>s+Math.abs(p.x-p.y),0)/(pts.length||1);
-    const near3 = pts.filter((p)=>Math.abs(p.x-p.y)<=3).length/(pts.length||1);
+    const meanAbs = (arr, f) => arr.reduce((s,p)=>s+Math.abs(f(p)-p.y),0)/(arr.length||1);
+    const maeModel = meanAbs(fin, (p)=>p.pred), maeGrid = meanAbs(fin, (p)=>p.grid);
+    const near3 = fin.filter((p)=>Math.abs(p.pred-p.y)<=3).length/(fin.length||1);
 
     $("truth-tiles").innerHTML = [
-      [mae.toFixed(2), "Puestos de error", true],
+      [maeModel.toFixed(2), "Puestos de error", true],
       [(hits/(races||1)).toFixed(2)+"/3", "Podio por carrera", false],
       [(near3*100).toFixed(0)+"%", "Dentro de ±3", false],
       [races, "Carreras verificadas", false],
     ].map((t) => '<div class="tile'+(t[2]?" accent":"")+'"><div class="n">'+t[0]+'</div><div class="k">'+t[1]+"</div></div>").join("");
 
-    coverageBar($("coverage"), 0.808, 0.80);
+    vsGridBars($("vs-grid"), maeModel, maeGrid, model.mae_pre_quali, model.mae_anchor_pre_quali);
+    const gain = maeGrid - maeModel;
+    $("vs-grid-note").innerHTML =
+      "Con clasificación, el modelo " + (gain > 0.05 ? "mejora a la parrilla en <b style='color:var(--ink)'>" + gain.toFixed(2) + " puestos</b>"
+        : gain < -0.05 ? "es <b style='color:var(--ink)'>peor que la parrilla</b> por " + (-gain).toFixed(2) + " puestos" : "<b style='color:var(--ink)'>empata con la parrilla</b>") +
+      " sobre " + fin.length + " llegadas, medido en la salida del simulador (que ya incluye el dado de abandonos; el regresor a secas, en la tabla de abajo, afina algo más). Sin clasificación no hay parrilla que copiar: el modelo se ancla al ritmo reciente de cada piloto" +
+      (model.mae_pre_quali != null && model.mae_anchor_pre_quali != null
+        ? " y " + (Math.abs(model.mae_pre_quali - model.mae_anchor_pre_quali) < 0.05 ? "<b style='color:var(--ink)'>no sabe más que él</b>"
+            : model.mae_pre_quali < model.mae_anchor_pre_quali ? "lo mejora en " + (model.mae_anchor_pre_quali - model.mae_pre_quali).toFixed(2) + " puestos" : "lo empeora") + "."
+        : ".") +
+      " La mayor parte del acierto viene de la información, no del aprendizaje automático; decirlo es parte del proyecto.";
+
+    const cal = (model.calibration || {}).post_quali;
+    const calPre = (model.calibration || {}).pre_quali;
+    coverageBar($("coverage"), cal ? cal.coverage : 0.80, 0.80);
+    $("coverage-note").textContent = cal
+      ? "Medido sobre 2025 con clasificación: cubre el " + (cal.coverage*100).toFixed(1) + " % con una anchura media de " +
+        cal.width.toFixed(1) + " puestos" + (calPre ? "; sin clasificación, el " + (calPre.coverage*100).toFixed(1) + " % (ruido calibrado aparte)." : ".")
+      : "";
     scatter($("scatter"), pts);
 
-    const ABL = { post_quali:"Sábado noche · con clasificación", pre_quali:"Viernes · sin clasificación", solo_forma:"Sin clasificación ni clima" };
-    $("ablation").innerHTML = Object.entries(model.ablation || {}).map(([k,v]) =>
-      "<tr><td>"+(ABL[k]||k)+'</td><td class="n">'+v.mae.toFixed(2)+'</td><td class="n">'+v.aciertos_podio_por_carrera.toFixed(2)+"/3</td></tr>").join("");
+    const ABL = { post_quali:"Sábado noche · con clasificación · ancla: parrilla", pre_quali:"Viernes · sin clasificación · ancla: ritmo reciente", solo_forma:"Sin clasificación ni clima" };
+    const abl = model.ablation || {};
+    $("ablation").innerHTML = Object.entries(abl).map(([k,v]) =>
+      "<tr><td>"+(ABL[k]||k)+'</td><td class="n"><b>'+v.mae.toFixed(2)+'</b></td><td class="n">'+(v.mae_ancla != null ? v.mae_ancla.toFixed(2) : "—")+
+      '</td><td class="n">'+v.aciertos_podio_por_carrera.toFixed(2)+"/3</td></tr>").join("");
+    if (abl.solo_forma && abl.pre_quali) $("climate-cost").textContent = Math.max(0, abl.solo_forma.mae - abl.pre_quali.mae).toFixed(2).replace(".", ",");
 
     const tr = data.track_record || [];
     const pend = tr.filter((t)=>t.actual==null).length;

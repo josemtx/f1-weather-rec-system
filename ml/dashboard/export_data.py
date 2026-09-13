@@ -177,15 +177,21 @@ def build_backtest_payload(db, year: int = 2025) -> dict:
             continue
         predictions = simulator.simulate_race(race, n_simulations=BACKTEST_SIMS, seed=42)
         actual = dict(zip(race["driver_code"], race["finish_position"]))
+        grid = dict(zip(race["driver_code"], race["grid_position"]))
+        finished = dict(zip(race["driver_code"], race["finished"]))
 
         drivers = []
         for _, p in predictions.iterrows():
+            code = p["driver_code"]
             drivers.append({
-                "code": p["driver_code"],
+                "code": code,
                 "p_win": _clean(p["p_win"]),
                 "p_podium": _clean(p["p_podium"]),
                 "predicted_mean": _clean(p["mean_finish_position"]),
-                "actual": _clean(actual.get(p["driver_code"])),
+                "actual": _clean(actual.get(code)),
+                # La parrilla es el baseline honesto: lo que acertarias sin modelo.
+                "grid": _clean(grid.get(code)),
+                "finished": _clean(finished.get(code)),
             })
         races.append({
             "year": int(year),
@@ -198,6 +204,22 @@ def build_backtest_payload(db, year: int = 2025) -> dict:
     return {"model_version": registry["evaluation"], "races": races}
 
 
+def _calibration_in_use() -> dict:
+    """Cobertura real del intervalo P10-P90 con la escala en uso, por regimen
+    (salida de ml/training/calibrate_simulation.py)."""
+    out = {}
+    for regime in ("post_quali", "pre_quali"):
+        path = MODELS_ROOT / f"simulation_calibration_{regime}.json"
+        if not path.exists():
+            continue
+        cal = json.loads(path.read_text(encoding="utf-8"))
+        row = next((r for r in cal["resultados"] if abs(r["escala"] - cal["en_uso"]) < 1e-9), None)
+        if row:
+            out[regime] = {"scale": cal["en_uso"], "coverage": row["cobertura"],
+                           "width": row["anchura_media"], "within3": row["aciertos_mas_menos_3"]}
+    return out
+
+
 def build_model_payload() -> dict:
     registry = json.loads((MODELS_ROOT / "registry.json").read_text(encoding="utf-8"))
     eval_metrics = json.loads((MODELS_ROOT / registry["evaluation"] / "metrics.json").read_text(encoding="utf-8"))
@@ -206,11 +228,17 @@ def build_model_payload() -> dict:
     ablation = json.loads(ablation_path.read_text(encoding="utf-8")) if ablation_path.exists() else {}
 
     shap = eval_metrics.get("finish_position", {}).get("shap_top15", {})
+    post = eval_metrics.get("finish_position", {})
+    pre = eval_metrics.get("finish_position_pre_quali", {})
     return {
         "evaluation_version": registry["evaluation"],
         "production_version": registry.get("production"),
-        "mae": _clean(eval_metrics.get("finish_position", {}).get("mae_val_2025")),
-        "residual_std": _clean(eval_metrics.get("finish_position", {}).get("residual_std_val_2025")),
+        "mae": _clean(post.get("mae_val_2025")),
+        "mae_anchor": _clean(post.get("mae_ancla_val_2025")),
+        "mae_pre_quali": _clean(pre.get("mae_val_2025")),
+        "mae_anchor_pre_quali": _clean(pre.get("mae_ancla_val_2025")),
+        "calibration": _calibration_in_use(),
+        "residual_std": _clean(post.get("residual_std_val_2025")),
         "auc_podium": _clean(eval_metrics.get("podium", {}).get("auc_val")),
         "auc_points": _clean(eval_metrics.get("points", {}).get("auc_val")),
         "auc_dnf": _clean(eval_metrics.get("dnf", {}).get("auc_val")),
