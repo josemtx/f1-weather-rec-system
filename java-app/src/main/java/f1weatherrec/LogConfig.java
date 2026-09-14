@@ -1,4 +1,4 @@
-package trabajo;
+package f1weatherrec;
 
 public final class LogConfig {
     private LogConfig() {

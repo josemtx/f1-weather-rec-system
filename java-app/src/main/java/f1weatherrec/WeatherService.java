@@ -1,5 +1,5 @@
 // WeatherService.java
-package trabajo;
+package f1weatherrec;
 
 import org.apache.http.client.fluent.Request;
 import org.apache.http.client.fluent.Response;

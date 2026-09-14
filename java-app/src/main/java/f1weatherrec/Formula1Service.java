@@ -1,4 +1,4 @@
-package trabajo;
+package f1weatherrec;
 
 import org.apache.http.HttpResponse;
 import org.apache.http.client.fluent.Request;

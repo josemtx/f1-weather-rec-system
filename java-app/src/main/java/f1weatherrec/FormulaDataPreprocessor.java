@@ -1,4 +1,4 @@
-package trabajo;
+package f1weatherrec;
 
 import org.json.JSONArray;
 import org.json.JSONObject;

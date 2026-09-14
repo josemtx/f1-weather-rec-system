@@ -1,7 +1,7 @@
 """Silueta del circuito para la cabecera de carrera.
 
 Los SVG vienen del paquete oficial de iconos de circuito de F1.com (carpeta
-`svg/` en la raiz del repo, aportados por el usuario -- ver memoria de
+`ml/dashboard/svg/`, paquete oficial de F1.com aportado por el usuario -- ver memoria de
 sesion: no se generan por telemetria, hay una fuente mas simple y mejor).
 Los 25 ficheros comparten estilo exacto: viewBox 524.4x524.4, una sola clase
 `.st0{fill:#241758;}` (silueta solida). Se recolorea a `currentColor` para
@@ -15,7 +15,7 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-SVG_DIR = Path(__file__).resolve().parents[2] / "svg"
+SVG_DIR = Path(__file__).resolve().parent / "svg"
 
 # circuit_short_name (canonico, ver ml/config/circuits.json) -> fichero.
 # Solo cubre los circuitos para los que el usuario aporto arte; el resto
