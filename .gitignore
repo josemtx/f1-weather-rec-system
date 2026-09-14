@@ -25,3 +25,6 @@ ml/models/*
 !ml/models/.gitkeep
 ml/data/raw/
 ml/data/processed/
+
+# Logs de la automatizacion del fin de semana
+ml/automation/logs/

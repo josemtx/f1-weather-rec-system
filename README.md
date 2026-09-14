@@ -53,9 +53,10 @@ Python · NASA POWER + ERA5      ─┘                 (10 grupos, shift(1))   
 | `ml/simulation/` | Monte Carlo sobre el modelo: clima, fiabilidad, jitter de boxes y ruido residual dimensionado con el error medido |
 | `ml/predictions/` | Registro auditable de predicciones con su régimen de información (antes / después de la clasificación) |
 | `ml/dashboard/` | Exportador a `data.json` y la página HTML sin dependencias |
+| `ml/automation/` | Fin de semana sin manos: cada hora de viernes a lunes ingiere lo nuevo, registra la predicción de cada régimen una sola vez, regenera el dashboard y hace push (Task Scheduler) |
 
 Stack: Python 3.12 (pandas, XGBoost, scikit-learn, SHAP), Java 17 + Maven,
-MongoDB, HTML/CSS/JS sin frameworks. 24 tests unitarios que no necesitan base
+MongoDB, HTML/CSS/JS sin frameworks. 29 tests unitarios que no necesitan base
 de datos.
 
 ## Decisiones que conviene conocer
@@ -99,11 +100,13 @@ python -m ml.training.train
 python -m ml.training.ablation
 python -m ml.training.calibrate_simulation       # y `... <version> pre_quali`
 
-# Cada fin de semana de carrera
-python -m ml.predictions.predict_race            # viernes, y otra vez tras la clasificación
-python -m ml.dashboard.export_data               # regenera ml/dashboard/web/data.json
+# Cada fin de semana de carrera (lo hace solo la tarea programada; a mano:)
+python -m ml.automation.weekend --dry-run        # ingesta + predicción si toca + dashboard, sin push
 python -m pytest ml/tests -q
 ```
+
+La tarea programada se registra una vez con el bloque comentado al final de
+`ml/automation/run-weekend.ps1`.
 
 El dashboard es una página autocontenida: basta con servir `ml/dashboard/web/`
 tal cual (GitHub Pages lo hace desde el workflow `dashboard` en cada push).
