@@ -182,13 +182,17 @@ def build_climate(db, context_df: pd.DataFrame) -> pd.DataFrame:
         how="left",
     )
 
-    # Norma estacional: media historica de temp_2m_avg para ese circuito+mes.
-    # No hay riesgo de fuga: es clima observado, independiente del desenlace
-    # de cualquier carrera, y conocido de antemano por climatologia.
+    # Norma estacional: media historica para ese circuito+mes. No hay riesgo
+    # de fuga: es clima observado, independiente del desenlace de cualquier
+    # carrera, y conocido de antemano por climatologia. La temperatura es
+    # feature (norma y delta); el resto solo sirve de respaldo cuando una
+    # carrera futura queda mas alla del horizonte del pronostico.
     coalesced["month"] = coalesced["date"].dt.month
-    norms = (
-        coalesced.groupby(["circuit_short_name", "month"])["temp_2m_avg"]
-        .mean().rename("circuit_seasonal_climate_norm_temp")
+    norms = coalesced.groupby(["circuit_short_name", "month"]).agg(
+        circuit_seasonal_climate_norm_temp=("temp_2m_avg", "mean"),
+        _norm_humidity=("humidity_relative", "mean"),
+        _norm_wind=("wind_speed_10m", "mean"),
+        _norm_precip=("precipitation_mm", "mean"),
     )
     merged = merged.merge(norms, left_on=["circuit_short_name", "_month"], right_index=True, how="left")
 
@@ -261,7 +265,18 @@ def build_climate(db, context_df: pd.DataFrame) -> pd.DataFrame:
     still_missing = out["race_day_temp_avg"].isna() & out["circuit_seasonal_climate_norm_temp"].notna()
     if still_missing.any():
         out.loc[still_missing, "race_day_temp_avg"] = out.loc[still_missing, "circuit_seasonal_climate_norm_temp"]
+        out.loc[still_missing, "race_day_humidity"] = merged.loc[still_missing.values, "_norm_humidity"].values
+        out.loc[still_missing, "race_day_wind_speed"] = merged.loc[still_missing.values, "_norm_wind"].values
+        out.loc[still_missing, "race_day_precipitation_mm"] = merged.loc[still_missing.values, "_norm_precip"].values
         out.loc[still_missing, "climate_source"] = "climatology"
+        track_model = fit_air_to_track(db)
+        if track_model:
+            out.loc[still_missing, "race_day_track_temp"] = estimate_track_temp(
+                track_model,
+                context_df.loc[still_missing, "circuit_short_name"],
+                out.loc[still_missing, "race_day_temp_avg"],
+                out.loc[still_missing, "race_day_humidity"],
+            )
         logger.info(f"Clima por climatologia (sin pronostico aun) en {int(still_missing.sum())} filas")
 
     # Bandera de lluvia: cuando hay sensores se usa si de verdad se corrio en

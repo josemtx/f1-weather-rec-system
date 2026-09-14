@@ -28,6 +28,7 @@ from ml.features.build_features import build_feature_matrix
 from ml.features.upcoming import get_next_race
 from ml.predictions.prediction_log import detect_information_regime, load_predictions_with_outcome
 from ml.simulation.monte_carlo import RaceSimulator
+from ml.simulation.randomness_models import rain_probability
 from ml.training.model_registry import MODELS_ROOT, get_production_dir
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,9 @@ def build_next_race_payload(db, simulator: RaceSimulator) -> tuple[dict, dict, d
             "humidity": _clean(row.get("race_day_humidity")),
             "wind": _clean(row.get("race_day_wind_speed")),
             "rain_mm": _clean(row.get("race_day_precipitation_mm")),
-            "rain_prob": _clean(row.get("forecast_rain_probability")),
+            # Sin pronostico, la misma climatologia del circuito que usa el simulador.
+            "rain_prob": _clean(row.get("forecast_rain_probability")) if pd.notna(row.get("forecast_rain_probability"))
+            else _clean(rain_probability(db, row["circuit_short_name"], race_date.month)),
         },
         "drivers": _drivers_payload(predictions, teams),
     }
