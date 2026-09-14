@@ -5,7 +5,7 @@
 
 Predicción probabilística de carreras de Fórmula 1 — probabilidad de victoria,
 podio y puntos por piloto, dónde acaba *si termina* y cuánto riesgo tiene de no
-hacerlo — servida en un dashboard estático que enseña cómo de bien lo hace el
+hacerlo — publicado en un dashboard estático que enseña cómo de bien lo hace el
 modelo frente a la alternativa más simple posible.
 
 **Dashboard en vivo → https://josemtx.github.io/f1-weather-rec-system/**
