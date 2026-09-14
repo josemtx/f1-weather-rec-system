@@ -12,6 +12,8 @@ import org.bson.conversions.Bson;
 import com.mongodb.client.MongoCollection;
 import org.json.JSONArray;
 
+import java.util.HashSet;
+import java.util.Set;
 import java.util.logging.Logger;
 
 public class MongoDBClient implements AutoCloseable {
@@ -49,6 +51,14 @@ public class MongoDBClient implements AutoCloseable {
                 Indexes.ascending("session_key", "driver_number", "lap_number"), unique);
         database.getCollection("pit").createIndex(
                 Indexes.ascending("session_key", "driver_number", "date"), unique);
+    }
+
+    public Set<Integer> sessionKeysWithLaps() {
+        Set<Integer> keys = new HashSet<>();
+        for (Integer key : database.getCollection("laps").distinct("session_key", Integer.class)) {
+            keys.add(key);
+        }
+        return keys;
     }
 
     public void insertSessionsData(JSONArray sessionsData) {

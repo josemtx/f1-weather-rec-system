@@ -2,8 +2,10 @@ package f1weatherrec;
 
 import org.json.JSONArray;
 
+import java.time.Year;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 import java.util.logging.Logger;
 
 public class AppFormula1 {
@@ -11,28 +13,47 @@ public class AppFormula1 {
 
     public static void main(String[] args) {
         LogConfig.configure();
-        LOGGER.info("Iniciando ingesta de datos de Formula 1...");
+        boolean incremental = args.length > 0 && args[0].equals("incremental");
+        LOGGER.info("Iniciando ingesta de datos de Formula 1" + (incremental ? " (incremental)" : "") + "...");
 
         List<Integer> years = Arrays.asList(2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025, 2026);
         List<Integer> modernYears = Arrays.asList(2023, 2024, 2025, 2026);
-
-        // Race para todo el rango (OpenF1 solo tiene datos reales desde 2023,
-        // los anios anteriores devuelven 404 y se registran como advertencia).
-        // Qualifying/Sprint Qualifying/Sprint solo se piden para 2023+: son las
-        // sesiones que sustentan el modelo "era moderna" (decision: precision
-        // maxima 2023-2026, ver ml/docs/ARCHITECTURE.md), y no existen antes.
-        JSONArray sessionsArray = new JSONArray(Formula1Service.getSessions(years, "Race"));
-        appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Qualifying"));
-        appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Sprint Qualifying"));
-        appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Sprint"));
-
-        if (sessionsArray.length() == 0) {
-            LOGGER.severe("No se obtuvo ninguna sesion para los anios " + years + ", se aborta la ingesta.");
-            return;
+        if (incremental) {
+            // Solo el anio en curso: lo unico que puede haber cambiado desde la ultima vez.
+            years = List.of(Year.now().getValue());
+            modernYears = years;
         }
-        LOGGER.info("Total de sesiones combinadas (Race+Qualifying+Sprint Qualifying+Sprint): " + sessionsArray.length());
 
         try (MongoDBClient mongoDBClient = new MongoDBClient()) {
+            // Race para todo el rango (OpenF1 solo tiene datos reales desde 2023,
+            // los anios anteriores devuelven 404 y se registran como advertencia).
+            // Qualifying/Sprint Qualifying/Sprint solo se piden para 2023+: son las
+            // sesiones que sustentan el modelo "era moderna" (decision: precision
+            // maxima 2023-2026, ver ml/docs/ARCHITECTURE.md), y no existen antes.
+            JSONArray sessionsArray = new JSONArray(Formula1Service.getSessions(years, "Race"));
+            appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Qualifying"));
+            appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Sprint Qualifying"));
+            appendSessions(sessionsArray, Formula1Service.getSessions(modernYears, "Sprint"));
+
+            if (incremental) {
+                // Una sesion con vueltas guardadas ya esta completa: no se vuelve a pedir.
+                Set<Integer> done = mongoDBClient.sessionKeysWithLaps();
+                JSONArray pending = new JSONArray();
+                for (int i = 0; i < sessionsArray.length(); i++) {
+                    if (!done.contains(sessionsArray.getJSONObject(i).getInt("session_key"))) {
+                        pending.put(sessionsArray.getJSONObject(i));
+                    }
+                }
+                LOGGER.info("Sesiones nuevas: " + pending.length() + " de " + sessionsArray.length());
+                sessionsArray = pending;
+            }
+
+            if (sessionsArray.length() == 0) {
+                LOGGER.info("No hay sesiones que ingerir para " + years + ".");
+                return;
+            }
+            LOGGER.info("Total de sesiones a ingerir (Race+Qualifying+Sprint Qualifying+Sprint): " + sessionsArray.length());
+
             saveSessions(mongoDBClient, sessionsArray);
             saveDrivers(mongoDBClient, sessionsArray);
             saveStints(mongoDBClient, sessionsArray);
