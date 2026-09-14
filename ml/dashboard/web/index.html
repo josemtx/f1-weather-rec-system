@@ -1,4 +1,10 @@
-<title>Parrilla</title>
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="description" content="Predicción probabilística de carreras de F1 con Monte Carlo sobre XGBoost, con intervalos calibrados y un track record verificable.">
+<title>Parrilla · F1 Race Prediction</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Titillium+Web:wght@400;600;700;900&family=JetBrains+Mono:wght@400;500;700;800&display=swap">
@@ -186,10 +192,11 @@
     display: grid; grid-template-columns: repeat(auto-fit, minmax(118px,1fr));
     border-top: 1px solid var(--line); margin-top: 18px;
   }
-  .ro { padding: 13px 14px; border-right: 1px solid var(--line-soft); }
+  .ro { padding: 13px 14px; border-right: 1px solid var(--line-soft); min-width: 0; }
   .ro:last-child { border-right: 0; }
   .ro .k { font-family: var(--mono); font-size: 9.5px; letter-spacing: .16em; text-transform: uppercase; color: var(--ink-3); }
-  .ro .v { font-family: var(--mono); font-size: 19px; font-weight: 700; margin-top: 4px; letter-spacing: -.02em; }
+  .ro .v { font-family: var(--mono); font-size: 19px; font-weight: 700; margin-top: 4px; letter-spacing: -.02em; overflow-wrap: anywhere; }
+  .ro .v.text { font-size: 14px; line-height: 1.3; }
   .ro .v small { font-size: 11px; font-weight: 500; color: var(--ink-3); }
 
   /* ---- podio ---- */
@@ -327,9 +334,21 @@
   footer { max-width: 1220px; margin: 0 auto; padding: 0 22px 44px; }
   footer .in { border-top: 1px solid var(--line); padding-top: 16px; font-family: var(--mono); font-size: 10px; letter-spacing: .08em; color: var(--ink-3); text-transform: uppercase; }
 
+  @media (max-width: 520px) {
+    .timing-head, .trow { grid-template-columns: 20px 64px 50px minmax(80px,1fr) 42px; gap: 7px; padding-inline: 10px; }
+    .tcode { font-size: 13px; }
+    .twin { font-size: 12.5px; }
+    .tdnf { padding: 3px 5px; font-size: 10px; }
+    .glab { font-size: 9px; padding-right: 4px; }
+    .pad { padding: 16px; }
+    .race-body { padding: 20px 16px 18px; }
+  }
+
   @media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation-duration:.01ms !important; transition-duration:.01ms !important; } }
 </style>
 
+</head>
+<body>
 <div class="topbar carbon">
   <div class="checkers thin"></div>
   <div class="topbar-in">
@@ -647,7 +666,7 @@
     const W = 600, H = 400, P = 48, N = 21;
     const sx = (v) => P + ((v-1)/(N-1)) * (W-P-18);
     const sy = (v) => H-P - ((v-1)/(N-1)) * (H-P-18);
-    let s = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" ' +
+    let s = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" role="img" ' +
       'aria-label="Puesto predicho frente a puesto real en las 24 carreras de 2025" style="max-width:100%;display:block">';
     [1,5,10,15,20].forEach((t) => {
       s += '<line x1="'+sx(t)+'" y1="'+(H-P)+'" x2="'+sx(t)+'" y2="18" stroke="var(--line-soft)" stroke-width="1"/>';
@@ -665,38 +684,39 @@
   }
 
   function vsGridBars(host, maeModel, maeGrid, maePre, maeAnchorPre) {
-    // Dos pares de barras: con clasificacion (modelo vs parrilla) y sin
-    // (modelo vs ritmo reciente). Menos es mejor; la escala es comun para
-    // que la diferencia se lea a ojo. Cada barra lleva su cifra al lado:
-    // el color de escuderia/kerb es identidad, nunca la unica codificacion.
-    const rows = [
-      ["Con clasificación", "Modelo", maeModel, true], ["", "Parrilla tal cual", maeGrid, false],
-    ];
+    // Dos grupos de barras: con clasificacion (modelo vs parrilla) y sin
+    // (modelo vs ritmo reciente). Menos es mejor; escala comun para que la
+    // diferencia se lea a ojo. Cada barra lleva su cifra al lado: el color
+    // es identidad, nunca la unica codificacion.
+    const groups = [["Con clasificación", [["Modelo", maeModel, true], ["Parrilla tal cual", maeGrid, false]]]];
     if (maePre != null && maeAnchorPre != null) {
-      rows.push(["Sin clasificación", "Modelo", maePre, true], ["", "Ritmo reciente tal cual", maeAnchorPre, false]);
+      groups.push(["Sin clasificación", [["Modelo", maePre, true], ["Ritmo reciente tal cual", maeAnchorPre, false]]]);
     }
-    const W = 600, L = 150, R = 70, BH = 18, GAP = 8, GROUP = 18, top = 14;
-    const max = Math.max(...rows.map((r) => r[2])) * 1.15;
+    const W = 600, L = 200, R = 70, BH = 18, GAP = 8, HEAD = 22, GROUP = 22;
+    const max = Math.max(...groups.flatMap((g) => g[1].map((r) => r[1]))) * 1.15;
     const x = (v) => L + (v / max) * (W - L - R);
-    let y = top, s = "";
-    rows.forEach((r, i) => {
-      if (i > 0 && r[0]) y += GROUP;
-      const fill = r[3] ? "var(--kerb)" : "var(--ink-3)";
-      if (r[0]) s += '<text x="0" y="'+(y+BH-4)+'" fill="var(--ink-2)" font-size="10.5" font-family="monospace" letter-spacing="1.2">'+r[0].toUpperCase()+"</text>";
-      s += '<rect x="'+L+'" y="'+y+'" width="'+(x(r[2])-L).toFixed(1)+'" height="'+BH+'" rx="2" fill="'+fill+'" fill-opacity="'+(r[3]?".9":".55")+'"/>';
-      s += '<text x="'+(x(r[2])+8).toFixed(1)+'" y="'+(y+BH-4)+'" fill="var(--ink)" font-size="13" font-weight="700" font-family="monospace">'+r[2].toFixed(2)+"</text>";
-      s += '<text x="'+(L-8)+'" y="'+(y+BH-4)+'" fill="'+(r[3]?"var(--ink)":"var(--ink-2)")+'" font-size="11" text-anchor="end" font-family="monospace">'+r[1]+"</text>";
-      y += BH + GAP;
+    let y = 8, s = "";
+    groups.forEach((g, gi) => {
+      if (gi > 0) y += GROUP;
+      s += '<text x="0" y="'+(y+11)+'" fill="var(--ink-2)" font-size="10.5" font-family="monospace" letter-spacing="1.2">'+g[0].toUpperCase()+"</text>";
+      y += HEAD;
+      g[1].forEach((r) => {
+        const fill = r[2] ? "var(--kerb)" : "var(--ink-3)";
+        s += '<rect x="'+L+'" y="'+y+'" width="'+(x(r[1])-L).toFixed(1)+'" height="'+BH+'" rx="2" fill="'+fill+'" fill-opacity="'+(r[2]?".9":".55")+'"/>';
+        s += '<text x="'+(x(r[1])+8).toFixed(1)+'" y="'+(y+BH-4)+'" fill="var(--ink)" font-size="13" font-weight="700" font-family="monospace">'+r[1].toFixed(2)+"</text>";
+        s += '<text x="'+(L-8)+'" y="'+(y+BH-4)+'" fill="'+(r[2]?"var(--ink)":"var(--ink-2)")+'" font-size="11" text-anchor="end" font-family="monospace">'+r[0]+"</text>";
+        y += BH + GAP;
+      });
     });
-    const H = y + 16;
-    s += '<text x="'+W+'" y="'+(H-2)+'" fill="var(--ink-3)" font-size="10" text-anchor="end" font-family="monospace" letter-spacing="1.2">PUESTOS DE ERROR · MENOS ES MEJOR</text>';
-    host.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" aria-label="Error medio del modelo frente a usar solo la parrilla o el ritmo reciente" style="max-width:100%;display:block">'+s+"</svg>";
+    const H = y + 18;
+    s += '<text x="'+W+'" y="'+(H-3)+'" fill="var(--ink-3)" font-size="10" text-anchor="end" font-family="monospace" letter-spacing="1.2">PUESTOS DE ERROR · MENOS ES MEJOR</text>';
+    host.innerHTML = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" role="img" aria-label="Error medio del modelo frente a usar solo la parrilla o el ritmo reciente" style="max-width:100%;display:block">'+s+"</svg>";
   }
 
   function coverageBar(host, actual, target) {
     const W = 600, H = 100, P = 34;
     const x = (v) => P + v * (W - P*2);
-    let s = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" height="auto" role="img" ' +
+    let s = '<svg viewBox="0 0 '+W+' '+H+'" width="100%" role="img" ' +
       'aria-label="Cobertura real del intervalo, '+(actual*100).toFixed(1)+' por ciento, frente al objetivo del '+(target*100)+' por ciento" style="max-width:100%;display:block">';
     s += '<rect x="'+P+'" y="34" width="'+(W-P*2)+'" height="22" rx="2" fill="var(--carbon-2)" stroke="var(--line)"/>';
     s += '<rect x="'+P+'" y="34" width="'+(x(actual)-P)+'" height="22" rx="2" fill="var(--gain)"/>';
@@ -728,8 +748,8 @@
       ["Lluvia", (w.rain_prob != null ? Math.round(w.rain_prob*100) : "—"), "%"],
       ["Humedad", (w.humidity != null ? Math.round(w.humidity) : "—"), "%"],
       ["Viento", (w.wind != null ? w.wind.toFixed(1) : "—"), "m/s"],
-      ["Fuente", fuente, ""],
-    ].map((r) => '<div class="ro"><div class="k">'+r[0]+'</div><div class="v">'+r[1]+
+      ["Fuente", fuente, "", "text"],
+    ].map((r) => '<div class="ro"><div class="k">'+r[0]+'</div><div class="v'+(r[3] ? " "+r[3] : "")+'">'+r[1]+
       (r[2] ? ' <small>'+r[2]+"</small>" : "")+"</div></div>").join("");
 
     podiumInto($("podium"), race.drivers);
@@ -835,3 +855,5 @@
   }
 })();
 </script>
+</body>
+</html>
